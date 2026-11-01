@@ -10,10 +10,11 @@
 //! never open another's document by guessing a name.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use axum::extract::ws::{Message as WsMessage, WebSocket};
+use axum::extract::ws::{CloseFrame, Message as WsMessage, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use rusqlite::{params, Connection};
 use tokio::sync::{broadcast, RwLock};
@@ -24,6 +25,15 @@ use yrs::{Doc, ReadTxn, StateVector, Transact, TransactionMut, Update};
 
 /// After this many stored updates a document is folded into one state blob on next load.
 const COMPACT_AFTER: usize = 200;
+
+/// Custom y-sync message for clients at version 1 or later: everything in this
+/// state vector is stored in SQLite, so a client holding no more than it has
+/// nothing left to save.
+const MSG_SAVED: u8 = 100;
+/// Custom y-sync message: the server holds changes it could not store. It retries.
+const MSG_SAVE_FAILED: u8 = 101;
+/// WebSocket close code for a client older than the app's `min_client`.
+pub const CLOSE_OUTDATED: u16 = 4426;
 
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS ydocs (
@@ -67,6 +77,46 @@ pub struct OpenDoc {
     pub awareness: RwLock<Awareness>,
     /// Encoded protocol messages (updates, awareness) for every connection.
     pub tx: broadcast::Sender<Arc<Vec<u8>>>,
+    key: DocKey,
+    db: Arc<Mutex<Connection>>,
+    /// An update reached memory but not the database; a full snapshot covers it.
+    unsaved: Arc<AtomicBool>,
+}
+
+impl OpenDoc {
+    /// What to tell a client about durability, retrying a failed store first.
+    async fn save_report(&self) -> Vec<u8> {
+        let awareness = self.awareness.read().await;
+        let txn = awareness.doc().transact();
+        let message = if self.unsaved.load(Ordering::SeqCst) && !self.store_snapshot(&txn) {
+            Message::Custom(MSG_SAVE_FAILED, Vec::new())
+        } else {
+            Message::Custom(MSG_SAVED, txn.state_vector().encode_v1())
+        };
+        let mut enc = EncoderV1::new();
+        message.encode(&mut enc);
+        enc.to_vec()
+    }
+
+    fn store_snapshot<T: ReadTxn>(&self, txn: &T) -> bool {
+        let state = txn.encode_state_as_update_v1(&StateVector::default());
+        let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
+        let stored = conn.execute(
+            "INSERT INTO ydocs (owner, name, state, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (owner, name) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at",
+            params![self.key.owner, self.key.name, state, now()],
+        );
+        match stored {
+            Ok(_) => {
+                self.unsaved.store(false, Ordering::SeqCst);
+                true
+            }
+            Err(err) => {
+                tracing::error!(?err, name = self.key.name, "storing document snapshot");
+                false
+            }
+        }
+    }
 }
 
 /// An app's mirror of a changed document into its own tables (see AppSpec).
@@ -108,6 +158,9 @@ impl SyncHub {
         let open = Arc::new(OpenDoc {
             awareness: RwLock::new(Awareness::new(doc)),
             tx,
+            key: key.clone(),
+            db: self.db.clone(),
+            unsaved: Arc::new(AtomicBool::new(false)),
         });
         self.attach(&key, &open);
         let mut docs = self.docs.lock().unwrap_or_else(|e| e.into_inner());
@@ -165,6 +218,7 @@ impl SyncHub {
         let db = self.db.clone();
         let tx = open.tx.clone();
         let key = key.clone();
+        let unsaved = open.unsaved.clone();
         let on_change = self.on_change;
         let awareness = open.awareness.try_write().expect("fresh document");
         awareness
@@ -175,6 +229,7 @@ impl SyncHub {
                     "INSERT INTO yupdates (owner, name, data) VALUES (?1, ?2, ?3)",
                     params![key.owner, key.name, e.update],
                 ) {
+                    unsaved.store(true, Ordering::SeqCst);
                     tracing::error!(?err, owner = key.owner, name = key.name, "storing update");
                 }
                 if let Some(f) = on_change {
@@ -275,10 +330,27 @@ pub async fn greeting(open: &OpenDoc) -> std::result::Result<Vec<u8>, yrs::sync:
     Ok(enc.to_vec())
 }
 
-/// One websocket connection, until it closes.
-pub async fn serve_connection(socket: WebSocket, open: Arc<OpenDoc>, key: DocKey) {
+/// One websocket connection, until it closes. `client` is the version the
+/// client reports (0 for one that predates reporting); below `min_client` it
+/// is turned away before it can read or write the document.
+pub async fn serve_connection(
+    socket: WebSocket,
+    open: Arc<OpenDoc>,
+    key: DocKey,
+    client: u32,
+    min_client: u32,
+) {
     let (mut sink, mut stream) = socket.split();
+    if client < min_client {
+        let frame = CloseFrame {
+            code: CLOSE_OUTDATED,
+            reason: "update required".into(),
+        };
+        let _ = sink.send(WsMessage::Close(Some(frame))).await;
+        return;
+    }
     let mut rx = open.tx.subscribe();
+    let mut last_report = Vec::new();
     match greeting(&open).await {
         Ok(msg) => {
             if sink.send(WsMessage::Binary(msg.into())).await.is_err() {
@@ -291,6 +363,20 @@ pub async fn serve_connection(socket: WebSocket, open: Arc<OpenDoc>, key: DocKey
         }
     }
     loop {
+        // Older clients log an error on a message type they don't know.
+        if client >= 1 {
+            let report = open.save_report().await;
+            if report != last_report {
+                if sink
+                    .send(WsMessage::Binary(report.clone().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                last_report = report;
+            }
+        }
         tokio::select! {
             incoming = stream.next() => {
                 let Some(Ok(msg)) = incoming else { break };
@@ -453,6 +539,46 @@ mod tests {
         let awareness = theirs.awareness.read().await;
         let t = awareness.doc().get_or_insert_text("t");
         assert_eq!(t.get_string(&awareness.doc().transact()), "");
+    }
+
+    fn decode_report(bytes: &[u8]) -> (u8, Vec<u8>) {
+        let mut dec = DecoderV1::from(bytes);
+        match Message::decode(&mut dec).unwrap() {
+            Message::Custom(tag, data) => (tag, data),
+            other => panic!("expected a report, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_save_report_covers_only_what_is_stored_and_recovers() {
+        let hub = hub();
+        let open = hub.open(key("note:1")).await_ok();
+        handle_incoming(&open, &sync_update_msg(client_update("milk")))
+            .await
+            .unwrap();
+        let (tag, vector) = decode_report(&open.save_report().await);
+        assert_eq!(tag, MSG_SAVED);
+        assert_eq!(StateVector::decode_v1(&vector).unwrap().len(), 1);
+
+        // The disk stops accepting writes: the change is in memory only.
+        let broken = "ALTER TABLE yupdates RENAME TO y2; ALTER TABLE ydocs RENAME TO y3";
+        hub.db.lock().unwrap().execute_batch(broken).unwrap();
+        handle_incoming(&open, &sync_update_msg(client_update("eggs")))
+            .await
+            .unwrap();
+        assert_eq!(decode_report(&open.save_report().await).0, MSG_SAVE_FAILED);
+
+        // Writes work again: the next report stores everything before claiming it.
+        let fixed = "ALTER TABLE y2 RENAME TO yupdates; ALTER TABLE y3 RENAME TO ydocs";
+        hub.db.lock().unwrap().execute_batch(fixed).unwrap();
+        let (tag, vector) = decode_report(&open.save_report().await);
+        assert_eq!(tag, MSG_SAVED);
+        assert_eq!(StateVector::decode_v1(&vector).unwrap().len(), 2);
+
+        let hub2 = SyncHub::new(hub.db.clone(), None).unwrap();
+        let open2 = hub2.open(key("note:1")).await_ok();
+        let awareness = open2.awareness.read().await;
+        assert_eq!(awareness.doc().transact().state_vector().len(), 2);
     }
 
     trait AwaitOk<T> {

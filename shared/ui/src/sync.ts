@@ -12,9 +12,26 @@
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { WebsocketProvider } from 'y-websocket';
-import { readable, type Readable } from 'svelte/store';
+import { readVarUint8Array, type Decoder } from 'lib0/decoding';
+import { readable, writable, type Readable } from 'svelte/store';
 
 export type SyncStatus = 'offline' | 'connecting' | 'online';
+/**
+ * Whether the server has stored this document's changes. `unknown` until it
+ * has said so on this page; `failed` means it holds them but couldn't store them.
+ */
+export type SaveState = 'unknown' | 'saved' | 'pending' | 'failed';
+
+/**
+ * Sent with every connection. A server turns away anything older than its
+ * app's `min_client`, so raise both when a change would let an older client
+ * damage documents.
+ */
+export const CLIENT_VERSION = 1;
+// The server's custom messages and close code (raven-server's sync.rs).
+const MSG_SAVED = 100;
+const MSG_SAVE_FAILED = 101;
+const CLOSE_OUTDATED = 4426;
 
 export interface OpenDoc {
     name: string;
@@ -24,6 +41,9 @@ export interface OpenDoc {
     /** True once the server has answered a full sync at least once this session. */
     status: Readable<SyncStatus>;
     synced: Readable<boolean>;
+    save: Readable<SaveState>;
+    /** The server refuses this client as too old; it stops reconnecting. */
+    outdated: Readable<boolean>;
     /** Let go; the document closes after a short linger if nobody else holds it. */
     release(): void;
 }
@@ -62,7 +82,43 @@ export function openDoc(base: string, name: string): OpenDoc {
     const doc = new Y.Doc({ gc: true });
     const local = new IndexeddbPersistence(`ravens${key}`, doc);
     const whenLocal = local.whenSynced.then(() => undefined);
-    const provider = new WebsocketProvider(wsBase(base), name, doc, { connect: true, maxBackoffTime: 10_000 });
+    const provider = new WebsocketProvider(wsBase(base), name, doc, {
+        connect: true,
+        maxBackoffTime: 10_000,
+        params: { v: String(CLIENT_VERSION) },
+    });
+
+    const save = writable<SaveState>('unknown');
+    let stored: Map<number, number> | null = null;
+    let saveFailed = false;
+    const refreshSave = () => {
+        if (saveFailed) return save.set('failed');
+        if (!stored) return save.set('unknown');
+        let covered = true;
+        Y.decodeStateVector(Y.encodeStateVector(doc)).forEach((clock, client) => {
+            if ((stored!.get(client) ?? 0) < clock) covered = false;
+        });
+        save.set(covered ? 'saved' : 'pending');
+    };
+    provider.messageHandlers[MSG_SAVED] = (_encoder, decoder: Decoder) => {
+        stored = Y.decodeStateVector(readVarUint8Array(decoder));
+        saveFailed = false;
+        refreshSave();
+    };
+    provider.messageHandlers[MSG_SAVE_FAILED] = (_encoder, decoder: Decoder) => {
+        readVarUint8Array(decoder);
+        saveFailed = true;
+        refreshSave();
+    };
+    doc.on('update', refreshSave);
+
+    const outdated = writable(false);
+    provider.on('connection-close', (event) => {
+        if (event?.code === CLOSE_OUTDATED) {
+            outdated.set(true);
+            provider.disconnect();
+        }
+    });
 
     const status = readable<SyncStatus>('connecting', (set) => {
         const onStatus = ({ status }: { status: 'connected' | 'disconnected' | 'connecting' }) =>
@@ -74,6 +130,8 @@ export function openDoc(base: string, name: string): OpenDoc {
     });
     const synced = readable<boolean>(provider.synced, (set) => {
         const onSync = (s: boolean) => set(s);
+        // The first sync may have finished before anyone subscribed.
+        set(provider.synced);
         provider.on('sync', onSync);
         return () => provider.off('sync', onSync);
     });
@@ -84,6 +142,8 @@ export function openDoc(base: string, name: string): OpenDoc {
         whenLocal,
         status,
         synced,
+        save,
+        outdated,
         refs: 1,
         closeTimer: null,
         release() {
@@ -114,6 +174,8 @@ interface DeepObservable {
 export function yStore<T>(type: DeepObservable, read: () => T): Readable<T> {
     return readable<T>(read(), (set) => {
         const update = () => set(read());
+        // The document may have changed before anyone subscribed.
+        update();
         type.observeDeep(update);
         return () => type.unobserveDeep(update);
     });

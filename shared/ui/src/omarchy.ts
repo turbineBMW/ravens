@@ -59,6 +59,8 @@ function tokens(colors: Record<string, string>): Record<string, string> {
     const set: Record<string, string | undefined> = {
         '--bg': bg,
         '--panel': c('lighter_background', bg),
+        // Chrome sits one step off the content, as libadwaita apps spend the same palette.
+        '--sidebar': c('dark_background', `color-mix(in srgb, ${bg} 75%, #000000)`),
         '--panel-2': 'color-mix(in srgb, var(--panel) 93%, var(--text))',
         '--text': fg,
         '--muted': `color-mix(in srgb, ${fg} 68%, ${bg})`,

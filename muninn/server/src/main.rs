@@ -86,6 +86,7 @@ async fn links(
 fn main() -> anyhow::Result<()> {
     raven_server::run(AppSpec {
         app: RavenApp::Muninn,
+        min_client: 0,
         migrations: MIGRATIONS,
         routes,
         on_change: Some(mirror::on_change),

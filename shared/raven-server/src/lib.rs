@@ -24,6 +24,8 @@ use crate::config::Config;
 pub struct AppState {
     pub app: RavenApp,
     pub version: String,
+    /// Sync clients older than this are turned away (see `AppSpec`).
+    pub min_client: u32,
     pub config: Config,
     /// One connection behind a mutex is plenty for a personal server; a pool
     /// comes when something measures the need.
@@ -37,6 +39,9 @@ pub type SharedState = Arc<AppState>;
 /// The app crate's description of itself.
 pub struct AppSpec {
     pub app: RavenApp,
+    /// The oldest client version allowed to sync. Raise it, with the client's
+    /// `CLIENT_VERSION`, when a change would let an older client damage documents.
+    pub min_client: u32,
     /// Applied in order; `PRAGMA user_version` records how many have run.
     pub migrations: &'static [&'static str],
     /// The app's API, routed under `/v1/...` (and `/<base>/v1/...`).
@@ -70,6 +75,7 @@ pub fn run(spec: AppSpec) -> Result<()> {
     let state: SharedState = Arc::new(AppState {
         app: spec.app,
         version,
+        min_client: spec.min_client,
         config,
         db,
         sync,

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, type Snippet } from 'svelte';
+    import { onMount, tick, type Snippet } from 'svelte';
     import { goto } from '$app/navigation';
     import { base } from '$app/paths';
     import { page } from '$app/state';
@@ -23,6 +23,16 @@
             (n.title || 'Untitled list').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
         ),
     );
+
+    // On a narrow screen the list is hidden while a note is open; come back to the same place.
+    let scroller: HTMLElement;
+    let listPosition = 0;
+    function rememberPosition() {
+        if (scroller.offsetParent) listPosition = scroller.scrollTop;
+    }
+    $effect(() => {
+        if (!page.params.id) void tick().then(() => (scroller.scrollTop = listPosition));
+    });
 
     onMount(() => {
         let live = true;
@@ -106,7 +116,7 @@
         </details>
     </div>
 </header>
-<div class="library-scroll">
+<div class="library-scroll" bind:this={scroller} onscroll={rememberPosition}>
     <div class="library-search">
         <input type="search" bind:value={query} placeholder="Search titles" aria-label="Search note titles" />
     </div>

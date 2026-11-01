@@ -15,6 +15,9 @@
     const note = untrack(() => openNote(id, index));
     const status = note.doc.status;
     const synced = note.doc.synced;
+    const save = note.doc.save;
+    const outdated = note.doc.outdated;
+    const tooNew = note.tooNew;
     const title = note.title;
     const items = note.items;
     let local = $state(false);
@@ -26,12 +29,28 @@
     const available = $derived(
         local && (received || !!$title || $items.length > 0 || note.doc.doc.getMap('meta').has('title')),
     );
+    const editable = $derived(available && !$tooNew);
+    // Once the server's copy has arrived, the note can correct its index entry.
+    let repaired = false;
+    $effect(() => {
+        if (local && $synced && !repaired) {
+            repaired = true;
+            note.repairIndex();
+        }
+    });
     const connection = $derived.by(() => {
         if (error) return 'Could not load this note from local storage.';
         if (!local) return 'Loading this note…';
-        if ($status === 'online') return $synced ? 'Connected' : 'Receiving changes…';
+        if ($outdated) return 'Update required · close and reopen Huginn';
+        if ($save === 'failed') return "Server couldn't save · retrying";
+        if ($status === 'online') {
+            if (!$synced) return 'Receiving changes…';
+            if ($save === 'saved') return 'Saved';
+            return $save === 'pending' ? 'Saving…' : 'Connected';
+        }
+        if ($save === 'pending') return 'Offline · changes waiting to sync';
         if ($status === 'connecting') return 'Connecting…';
-        return 'Offline · reconnect to sync';
+        return $save === 'saved' ? 'Offline' : 'Offline · reconnect to sync';
     });
     onMount(() => {
         let live = true;
@@ -51,7 +70,7 @@
 </script>
 
 <EditorBar {back} subtitle={connection}>
-    {#if available}
+    {#if editable}
         <input
             class="headerbar-input"
             type="text"
@@ -63,12 +82,17 @@
         />
     {/if}
     {#snippet actions()}
-        {#if available}<NoteActions {note} {id} {ondelete} />{/if}
+        {#if editable}<NoteActions {note} {id} {ondelete} />{/if}
     {/snippet}
 </EditorBar>
 <div class="editor-body">
-    {#if available}
+    {#if editable}
         {@render children(note)}
+    {:else if available}
+        <div class="workspace-empty">
+            <h2>{$title || 'Untitled list'}</h2>
+            <p class="muted">A newer version of Huginn saved this note. Close and reopen the app to update it.</p>
+        </div>
     {:else if local}
         <div class="workspace-empty">
             <h2>Waiting for this note</h2>
