@@ -61,7 +61,7 @@
 </script>
 
 <header class="topbar">
-    <a class="brand" href="{base}/"><img src="{base}/icon.svg" alt="" /> Muninn</a>
+    <a class="brand" href="{base}/"><img src="{base}/icon-192.png" alt="" /> Muninn</a>
     <span class="spacer"></span>
     <span class="sync {$status}" title={statusHint[$status]} aria-label={statusHint[$status]} role="status"></span>
     <details class="menu">

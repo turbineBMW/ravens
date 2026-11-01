@@ -71,7 +71,7 @@
 </script>
 
 <header class="topbar">
-    <a class="brand" href="{base}/"><img src="{base}/icon.svg" alt="" /> Huginn</a>
+    <a class="brand" href="{base}/"><img src="{base}/icon-192.png" alt="" /> Huginn</a>
     <span class="spacer"></span>
     <span class="sync {$status}" title={statusHint[$status]} aria-label={statusHint[$status]} role="status"></span>
     <details class="menu">

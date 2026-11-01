@@ -26,7 +26,7 @@ muninn/server          same, for Muninn, plus the task mirror, links API and not
 muninn/web             served under /muninn
 muninn/agent           muninn-agent: reminders as desktop notifications (SSE → desktop notifications)
 deploy/                compose for the Mac mini; tailscale serve notes
-scripts/               sync-e2e.mjs (two clients through a live server), seed-demo.mjs
+scripts/               sync-e2e.mjs (two clients through a live server), seed-demo.mjs, build-icons.sh (app icons from <app>/web/icon-source.png)
 spikes/pen/            the pen-on-the-web go/no-go page
 Dockerfile             one file, `--build-arg APP=huginn|muninn`
 ```
