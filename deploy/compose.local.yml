@@ -1,11 +1,11 @@
-# Build both images from this checkout instead of pulling them:
-#   docker compose -f deploy/compose.yml -f deploy/compose.local.yml up -d --build
+# Build both images from a copy of the repo instead of pulling them. Use
+# scripts/deploy-mini.sh, which runs this and sets RAVEN_VERSION to the commit.
 services:
     huginn:
         build:
             context: ..
-            args: { APP: huginn }
+            args: { APP: huginn, RAVEN_VERSION: "${RAVEN_VERSION:-dev}" }
     muninn:
         build:
             context: ..
-            args: { APP: muninn }
+            args: { APP: muninn, RAVEN_VERSION: "${RAVEN_VERSION:-dev}" }
