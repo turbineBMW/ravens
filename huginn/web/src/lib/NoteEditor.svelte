@@ -1,15 +1,14 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import Checklist from '$lib/Checklist.svelte';
-    import { remindMeHref, remindersFor, reminderHref, type Reminder } from '$lib/links';
+    import { remindersFor, reminderHref, type Reminder } from '$lib/links';
     import type { Note } from '$lib/notes';
 
-    let { note, id, ondelete }: { note: Note; id: string; ondelete: () => void } = $props();
+    let { note, id }: { note: Note; id: string } = $props();
 
     // Top-level store declarations, re-derived when the note changes.
     const title = $derived(note.title);
     const items = $derived(note.items);
-    let confirmDelete = $state(false);
 
     // Reminders Muninn holds for this note (best effort: Muninn may be down).
     let reminders = $state<Reminder[]>([]);
@@ -30,31 +29,6 @@
 </script>
 
 <article class="note">
-    <header class="note-head">
-        <input
-            class="title"
-            type="text"
-            placeholder="Title"
-            aria-label="Note title"
-            value={$title}
-            autocomplete="off"
-            oninput={(e) => note.setTitle(e.currentTarget.value)}
-        />
-        <details class="menu">
-            <summary class="btn" aria-label="List actions">⋯</summary>
-            <div class="sheet actions">
-                <a class="btn" href={remindMeHref(id, $title || 'Untitled list')}>Remind me about this list…</a>
-                <button class="btn" type="button" onclick={() => note.uncheckAll()}>Uncheck all</button>
-                <button class="btn" type="button" onclick={() => note.removeChecked()}>Delete checked items</button>
-                {#if confirmDelete}
-                    <button class="btn danger" type="button" onclick={ondelete}>Move to Recently Deleted</button>
-                    <button class="btn" type="button" onclick={() => (confirmDelete = false)}>Keep it</button>
-                {:else}
-                    <button class="btn" type="button" onclick={() => (confirmDelete = true)}>Delete list…</button>
-                {/if}
-            </div>
-        </details>
-    </header>
     {#if openReminders.length}
         <p class="reminders small">
             ⏰

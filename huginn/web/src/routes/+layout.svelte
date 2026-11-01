@@ -1,7 +1,6 @@
 <script lang="ts">
     import '../app.css';
     import { onMount, setContext } from 'svelte';
-    import { base } from '$app/paths';
     import { omarchyHint, omarchyState, omarchyThemeName, setFollowOmarchy, startOmarchy } from '@ravens/ui/omarchy';
     import type { HealthResponse, Identity } from '@ravens/ui/api';
     import { api } from '$lib/api';
@@ -70,66 +69,59 @@
     });
 </script>
 
-<header class="topbar">
-    <a class="brand" href="{base}/"><img src="{base}/icon-192.png" alt="" /> Huginn</a>
-    <span class="spacer"></span>
-    <span class="sync {$status}" title={statusHint[$status]} aria-label={statusHint[$status]} role="status"></span>
-    <details class="menu">
-        <summary class="btn" aria-label="Settings">⋯</summary>
-        <div class="sheet">
-            <p class="small muted" style="margin: 0 0 8px">
-                {#if me}
-                    Signed in as <strong>{me.name ?? me.login}</strong> through Tailscale.
-                {:else if meError}
-                    Not signed in: {meError}
-                {:else}
-                    Signing in…
-                {/if}
-                <span style="display: block">{statusHint[$status]}{$synced ? '' : ' Not yet synced this session.'}</span
-                >
-            </p>
-            <label class="toggle">
-                <input
-                    type="checkbox"
-                    checked={$omarchyState !== 'off'}
-                    onchange={(e) => setFollowOmarchy(e.currentTarget.checked)}
-                />
-                <span>
-                    Follow the Omarchy theme
-                    <span class="small muted" style="display: block">
-                        {$omarchyState === 'on' && $omarchyThemeName
-                            ? `Following ${$omarchyThemeName}.`
-                            : omarchyHint[$omarchyState]}
-                    </span>
-                </span>
-            </label>
-            <label class="wide-setting small"
-                >Notes list width
-                <input
-                    type="range"
-                    min="280"
-                    max="360"
-                    step="10"
-                    value={listWidth}
-                    oninput={(e) => saveWidth(e.currentTarget.value)}
-                />
-            </label>
-            {#if installPrompt}
-                <button class="btn" type="button" onclick={() => void install()}>Install as an app</button>
-            {/if}
-            <p class="small muted" style="margin: 8px 0 0">
-                <a href="/muninn/">Open Muninn</a>
-                {#if health}
-                    · huginn-server {health.version}, schema {health.schema}
-                {/if}
-            </p>
-        </div>
-    </details>
-</header>
-
 <main style:--list-width={`${listWidth}px`} class="workspace" class:has-selection={!!page.params.id}>
     <aside class="notes-pane" aria-label="Notes library">
-        <NotesList {index} />
+        <NotesList {index}>
+            {#snippet settings()}
+                <p class="small muted menu-note">
+                    {#if me}
+                        Signed in as <strong>{me.name ?? me.login}</strong> through Tailscale.
+                    {:else if meError}
+                        Not signed in: {meError}
+                    {:else}
+                        Signing in…
+                    {/if}
+                    <span style="display: block"
+                        >{statusHint[$status]}{$synced ? '' : ' Not yet synced this session.'}</span
+                    >
+                </p>
+                <label class="toggle">
+                    <input
+                        type="checkbox"
+                        checked={$omarchyState !== 'off'}
+                        onchange={(e) => setFollowOmarchy(e.currentTarget.checked)}
+                    />
+                    <span>
+                        Follow the Omarchy theme
+                        <span class="small muted" style="display: block">
+                            {$omarchyState === 'on' && $omarchyThemeName
+                                ? `Following ${$omarchyThemeName}.`
+                                : omarchyHint[$omarchyState]}
+                        </span>
+                    </span>
+                </label>
+                <label class="wide-setting small"
+                    >Notes list width
+                    <input
+                        type="range"
+                        min="280"
+                        max="360"
+                        step="10"
+                        value={listWidth}
+                        oninput={(e) => saveWidth(e.currentTarget.value)}
+                    />
+                </label>
+                {#if installPrompt}
+                    <button class="btn" type="button" onclick={() => void install()}>Install as an app</button>
+                {/if}
+                <p class="small muted menu-note">
+                    <a href="/muninn/">Open Muninn</a>
+                    {#if health}
+                        · huginn-server {health.version}, schema {health.schema}
+                    {/if}
+                </p>
+            {/snippet}
+        </NotesList>
     </aside>
     <section class="editor-pane" aria-label="Selected note">
         {@render children()}
