@@ -67,6 +67,8 @@ export function openDoc(base: string, name: string): OpenDoc {
     const status = readable<SyncStatus>('connecting', (set) => {
         const onStatus = ({ status }: { status: 'connected' | 'disconnected' | 'connecting' }) =>
             set(status === 'connected' ? 'online' : status === 'connecting' ? 'connecting' : 'offline');
+        // A reopened document may already be connected, with no event coming.
+        set(provider.wsconnected ? 'online' : provider.wsconnecting ? 'connecting' : 'offline');
         provider.on('status', onStatus);
         return () => provider.off('status', onStatus);
     });
