@@ -26,7 +26,7 @@ muninn/server          same, for Muninn, plus the task mirror, links API and not
 muninn/web             served under /muninn
 muninn/agent           muninn-agent: reminders as desktop notifications (SSE → desktop notifications)
 deploy/                compose for the Mac mini; tailscale serve notes
-scripts/               sync-e2e.mjs (two clients through a live server), seed-demo.mjs, build-icons.sh (app icons from <app>/web/icon-source.png)
+scripts/               sync-e2e.mjs (two clients through a live server), seed-demo.mjs, build-icons.sh (app icons from <app>/web/icon-source.png), deploy-mini.sh (deploy to the Mac mini)
 spikes/pen/            the pen-on-the-web go/no-go page
 Dockerfile             one file, `--build-arg APP=huginn|muninn`
 ```
@@ -58,7 +58,15 @@ So: branch, push, `gh pr create`, wait for the check, merge.
 
 ## Deploy
 
-GitHub Actions builds `ghcr.io/turbinebmw/huginn` and `.../muninn` for
+From this checkout, in any directory:
+
+```sh
+scripts/deploy-mini.sh --dry-run   # what would change on the mini
+scripts/deploy-mini.sh             # copy, build there, restart, confirm it's live
+```
+
+That is the usual way to deploy, and it includes uncommitted work. Or use the
+published images: GitHub Actions builds `ghcr.io/turbinebmw/huginn` and `.../muninn` for
 amd64 and arm64 on every push to main (public images, so the mini pulls
 them without a token). On the Mac mini:
 

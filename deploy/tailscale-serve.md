@@ -37,17 +37,11 @@ Removing: `tailscale serve --set-path /huginn off` (same for `/muninn`).
 
 ## Deploying from this checkout
 
-Until the GitHub images exist, the mini builds the images itself from a copy
-of the tree (OrbStack's Docker is at `/usr/local/bin/docker`, which the
-non-interactive shell does not have on its PATH):
+`scripts/deploy-mini.sh` copies this checkout to the mini, builds both images
+there and restarts them (`--dry-run` shows what would change first). Use it
+rather than a hand-typed `rsync --delete`: run from the wrong directory, that
+replaces the target with whatever directory you're in.
 
-```sh
-rsync -az --delete --exclude target --exclude node_modules --exclude .svelte-kit \
-      --exclude '/*/web/build' --exclude .git --exclude '*.db*' \
-      ./ brandons-mac-mini.tail339aa4.ts.net:homeserver/ravens/
-ssh brandons-mac-mini.tail339aa4.ts.net 'cd homeserver/ravens && export PATH=/usr/local/bin:$PATH && \
-      docker compose -f deploy/compose.yml -f deploy/compose.local.yml up -d --build'
-```
-
-The stacks live under `~/homeserver/<name>` on the mini, next to immich,
+OrbStack's Docker is at `/usr/local/bin/docker`, which the non-interactive
+shell does not have on its PATH. The stacks live under `~/homeserver/<name>` on the mini, next to immich,
 seafile and vaultwarden; the compose project is `ravens`.
