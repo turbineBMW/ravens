@@ -121,6 +121,11 @@ theme* in either app's menu; the setting is shared by both.
 
 ## Plan
 
+Huginn's next stages are detailed in the
+[Apple Notes parity roadmap](docs/huginn-apple-notes-roadmap.md), including
+the phone/two-column layout, current feature gaps, dependencies, and acceptance
+criteria for each phase.
+
 1. Pen spike (`spikes/pen`): the Surface passes; the Fold is untested (no compatible pen yet).
 2. The shell: identity, theme, installable.
 3. Huginn checklists on the sync layer: the Keep grocery list, done right.

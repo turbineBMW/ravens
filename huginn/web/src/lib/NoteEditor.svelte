@@ -22,7 +22,7 @@
                 reminders = r;
                 remindersKnown = true;
             },
-            () => undefined
+            () => undefined,
         );
         return () => (gone = true);
     });
@@ -35,6 +35,7 @@
             class="title"
             type="text"
             placeholder="Title"
+            aria-label="Note title"
             value={$title}
             autocomplete="off"
             oninput={(e) => note.setTitle(e.currentTarget.value)}
@@ -46,7 +47,7 @@
                 <button class="btn" type="button" onclick={() => note.uncheckAll()}>Uncheck all</button>
                 <button class="btn" type="button" onclick={() => note.removeChecked()}>Delete checked items</button>
                 {#if confirmDelete}
-                    <button class="btn danger" type="button" onclick={ondelete}>Yes, delete this list</button>
+                    <button class="btn danger" type="button" onclick={ondelete}>Move to Recently Deleted</button>
                     <button class="btn" type="button" onclick={() => (confirmDelete = false)}>Keep it</button>
                 {:else}
                     <button class="btn" type="button" onclick={() => (confirmDelete = true)}>Delete list…</button>
