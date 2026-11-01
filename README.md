@@ -90,6 +90,7 @@ drag-to-reorder and checked-to-the-bottom conflict-free.
 
 ```sh
 node scripts/sync-e2e.mjs            # against a running huginn-server on :8081
+node scripts/huginn-browser-test.mjs # headless Chromium against its own throwaway server
 node scripts/seed-demo.mjs           # a demo grocery list for the dev user; prints the note id
 node scripts/seed-muninn.mjs ws://127.0.0.1:8082/muninn/v1/sync <note id>   # demo lists, one linked to that note
 ```

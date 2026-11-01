@@ -32,7 +32,7 @@
     background: var(--bg);
 }
 .notes-pane .headerbar {
-    background: var(--panel);
+    background: var(--sidebar);
 }
 .headerbar-end {
     display: flex;
@@ -113,6 +113,9 @@
 .note {
     max-width: 640px;
     margin: 0 auto;
+}
+.menu .sheet.actions {
+    background: var(--sidebar);
 }
 .sheet.actions {
     display: grid;
@@ -324,7 +327,7 @@ main.workspace {
     flex-direction: column;
     min-height: 0;
     min-width: 0;
-    background: var(--panel);
+    background: var(--sidebar);
 }
 .editor-pane {
     display: none;

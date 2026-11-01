@@ -9,7 +9,8 @@
  * Y.Map of item id to Y.Map { text, checked, checkedAt, pos }. Each item is
  * its own object with a stable id, a completion state and a fractional
  * index `pos`, so reordering, checking and offline editing on two devices
- * merge without clobbering each other.
+ * merge without clobbering each other. `meta.format` versions that shape;
+ * a note without it is format 1.
  */
 import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
@@ -18,6 +19,9 @@ import { openDoc, yStore, newId, type OpenDoc } from '@ravens/ui/sync';
 import type { Readable } from 'svelte/store';
 
 export type NoteKind = 'checklist' | 'text';
+
+/** The newest note format this client can safely edit. */
+export const NOTE_FORMAT = 1;
 
 export interface NoteMeta {
     id: string;
@@ -52,6 +56,8 @@ export interface Index {
     notes: Readable<NoteMeta[]>;
     create(kind: NoteKind): string;
     touch(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done'>>): void;
+    /** Correct the mirrored fields from the note itself, without counting as an edit. */
+    repair(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'preview' | 'open' | 'done'>>): void;
     remove(id: string): void;
     restore(id: string): void;
     release(): void;
@@ -108,6 +114,16 @@ export function openIndex(): Index {
                 m.set('updated', Date.now());
             });
         },
+        repair(id, patch) {
+            const m = map.get(id);
+            if (!m) return;
+            doc.doc.transact(() => {
+                for (const k of ['title', 'preview', 'open', 'done'] as const) {
+                    const value = patch[k];
+                    if (value !== undefined && value !== readMeta(id, m)[k]) m.set(k, value);
+                }
+            });
+        },
         remove(id) {
             map.get(id)?.set('deletedAt', Date.now());
         },
@@ -123,6 +139,8 @@ export function openIndex(): Index {
 export interface Note {
     doc: OpenDoc;
     title: Readable<string>;
+    /** Saved by a newer client: shown as unavailable, and every edit below does nothing. */
+    tooNew: Readable<boolean>;
     /** Unchecked items by position, then checked items in the order they were checked. */
     items: Readable<Item[]>;
     setTitle(title: string): void;
@@ -135,6 +153,8 @@ export interface Note {
     remove(id: string): void;
     uncheckAll(): void;
     removeChecked(): void;
+    /** Bring this note's entry in the index back in line with its contents. */
+    repairIndex(): void;
     release(): void;
 }
 
@@ -158,7 +178,7 @@ export function sortItems(all: Item[]): Item[] {
 
 export function openNote(id: string, index?: Index): Note {
     const doc = openDoc(base, `note:${id}`);
-    const meta = doc.doc.getMap<string>('meta');
+    const meta = doc.doc.getMap<string | number>('meta');
     const items = doc.doc.getMap<YItem>('items');
 
     const readAll = () => {
@@ -171,30 +191,37 @@ export function openNote(id: string, index?: Index): Note {
             .filter((i) => !i.checked)
             .map((i) => i.pos);
 
-    /** Keep the index card in step with the items. */
-    const touched = () => {
-        if (!index) return;
+    const isTooNew = () => Number(meta.get('format') ?? 1) > NOTE_FORMAT;
+
+    /** What the index card shows of the items. */
+    const summary = () => {
         const all = readAll();
         const open = all.filter((i) => !i.checked);
-        index.touch(id, {
+        return {
             preview: open
                 .slice(0, 4)
                 .map((i) => i.text)
                 .join('\n'),
             open: open.length,
             done: all.length - open.length,
-        });
+        };
     };
+
+    /** Keep the index card in step with the items. */
+    const touched = () => index?.touch(id, summary());
 
     return {
         doc,
-        title: yStore(meta, () => meta.get('title') ?? ''),
+        title: yStore(meta, () => String(meta.get('title') ?? '')),
+        tooNew: yStore(meta, isTooNew),
         items: yStore(items, readAll),
         setTitle(title) {
+            if (isTooNew()) return;
             meta.set('title', title);
             index?.touch(id, { title });
         },
         addItem(text, afterId = null) {
+            if (isTooNew()) return '';
             const iid = newId();
             const open = readAll().filter((i) => !i.checked);
             const at = afterId ? open.findIndex((i) => i.id === afterId) : open.length - 1;
@@ -213,10 +240,12 @@ export function openNote(id: string, index?: Index): Note {
             return iid;
         },
         setText(iid, text) {
+            if (isTooNew()) return;
             items.get(iid)?.set('text', text);
             touched();
         },
         setChecked(iid, checked) {
+            if (isTooNew()) return;
             const m = items.get(iid);
             if (!m) return;
             doc.doc.transact(() => {
@@ -231,6 +260,7 @@ export function openNote(id: string, index?: Index): Note {
             touched();
         },
         move(iid, beforeId, afterId) {
+            if (isTooNew()) return;
             const m = items.get(iid);
             if (!m) return;
             const before = beforeId ? String(items.get(beforeId)?.get('pos') ?? '') || null : null;
@@ -239,10 +269,12 @@ export function openNote(id: string, index?: Index): Note {
             touched();
         },
         remove(iid) {
+            if (isTooNew()) return;
             items.delete(iid);
             touched();
         },
         uncheckAll() {
+            if (isTooNew()) return;
             doc.doc.transact(() => {
                 let last = openPositions().pop() ?? null;
                 for (const i of readAll().filter((i) => i.checked)) {
@@ -256,10 +288,19 @@ export function openNote(id: string, index?: Index): Note {
             touched();
         },
         removeChecked() {
+            if (isTooNew()) return;
             doc.doc.transact(() => {
                 for (const i of readAll().filter((i) => i.checked)) items.delete(i.id);
             });
             touched();
+        },
+        repairIndex() {
+            // An empty document may just not be downloaded: it proves nothing.
+            if (!index || isTooNew() || (!meta.has('title') && items.size === 0)) return;
+            index.repair(id, {
+                ...summary(),
+                ...(meta.has('title') ? { title: String(meta.get('title')) } : {}),
+            });
         },
         release: () => doc.release(),
     };

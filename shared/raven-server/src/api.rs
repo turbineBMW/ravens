@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use axum::extract::ws::WebSocketUpgrade;
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -66,13 +66,22 @@ async fn me(User(identity): User) -> Json<raven_core::Identity> {
     Json(identity)
 }
 
+#[derive(serde::Deserialize)]
+struct SyncParams {
+    /// The client's version; anything missing or unreadable counts as 0.
+    v: Option<String>,
+}
+
 /// The y-websocket endpoint for one of the user's documents.
 async fn sync_ws(
     ws: WebSocketUpgrade,
     User(identity): User,
     UrlPath(name): UrlPath<String>,
+    Query(params): Query<SyncParams>,
     State(state): State<SharedState>,
 ) -> Response {
+    let client = params.v.and_then(|v| v.parse().ok()).unwrap_or(0);
+    let min_client = state.min_client;
     if !sync::valid_name(&name) {
         return (StatusCode::BAD_REQUEST, "bad document name").into_response();
     }
@@ -91,7 +100,7 @@ async fn sync_ws(
                 .into_response();
         }
     };
-    ws.on_upgrade(move |socket| sync::serve_connection(socket, open, key))
+    ws.on_upgrade(move |socket| sync::serve_connection(socket, open, key, client, min_client))
 }
 
 #[cfg(test)]
@@ -116,6 +125,10 @@ mod tests {
     }
 
     fn state(web_dir: Option<std::path::PathBuf>) -> SharedState {
+        state_requiring(web_dir, 0)
+    }
+
+    fn state_requiring(web_dir: Option<std::path::PathBuf>, min_client: u32) -> SharedState {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::migrate(&conn, &["CREATE TABLE t (id INTEGER)"]).unwrap();
         let db = Arc::new(Mutex::new(conn));
@@ -123,6 +136,7 @@ mod tests {
         Arc::new(AppState {
             app: RavenApp::Huginn,
             version: "test".into(),
+            min_client,
             config: Config {
                 listen_addr: String::new(),
                 db_path: ":memory:".into(),
@@ -208,5 +222,44 @@ mod tests {
         assert_eq!(status, 404);
         let (status, _) = get_path(&app, "/huginn/", &[]).await;
         assert_eq!(status, 404);
+    }
+
+    #[tokio::test]
+    async fn the_sync_socket_turns_away_old_clients_and_reports_saves_to_new_ones() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::Message as Ws;
+
+        let app = router(state_requiring(None, 1), Router::new());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let connect = |query: &'static str| async move {
+            let mut req = format!("ws://{addr}/v1/sync/note:1{query}")
+                .into_client_request()
+                .unwrap();
+            req.headers_mut()
+                .insert("Tailscale-User-Login", "b@example.com".parse().unwrap());
+            tokio_tungstenite::connect_async(req).await.unwrap().0
+        };
+
+        for query in ["", "?v=0", "?v=nonsense"] {
+            let mut old = connect(query).await;
+            match old.next().await.unwrap().unwrap() {
+                Ws::Close(Some(frame)) => assert_eq!(u16::from(frame.code), sync::CLOSE_OUTDATED),
+                other => panic!("{query}: expected a close, got {other:?}"),
+            }
+        }
+
+        let mut current = connect("?v=1").await;
+        assert!(
+            matches!(current.next().await, Some(Ok(Ws::Binary(_)))),
+            "greeting"
+        );
+        match current.next().await.unwrap().unwrap() {
+            // A message tagged 100 is a save report.
+            Ws::Binary(report) => assert_eq!(report[0], 100),
+            other => panic!("expected a save report, got {other:?}"),
+        }
     }
 }

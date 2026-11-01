@@ -16,6 +16,7 @@
     setContext('index', index);
     const status = index.doc.status;
     const synced = index.doc.synced;
+    const outdated = index.doc.outdated;
 
     let listWidth = $state(300);
     function saveWidth(value: string) {
@@ -82,7 +83,9 @@
                         Signing in…
                     {/if}
                     <span style="display: block"
-                        >{statusHint[$status]}{$synced ? '' : ' Not yet synced this session.'}</span
+                        >{$outdated
+                            ? 'Update required: close and reopen Huginn.'
+                            : statusHint[$status] + ($synced ? '' : ' Not yet synced this session.')}</span
                     >
                 </p>
                 <label class="toggle">

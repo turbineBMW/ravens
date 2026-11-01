@@ -450,6 +450,7 @@ mod tests {
         use std::sync::{Arc, Mutex};
         let db = Arc::new(Mutex::new(conn));
         Arc::new(raven_server::AppState {
+            min_client: 0,
             app: raven_server::RavenApp::Muninn,
             version: "test".into(),
             config: raven_server::config::Config {
