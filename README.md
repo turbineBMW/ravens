@@ -49,10 +49,18 @@ npm run dev:muninn      # http://localhost:5174/muninn/
 To open a dev server from the Fold, add `-- --host` and use this machine's
 tailnet name.
 
+## Working on it
+
+The repo is github.com/turbineBMW/ravens and `main` is protected: changes
+arrive by pull request, the `check` job (Rust tests, svelte-check) must pass,
+history stays linear, and nobody force-pushes or deletes it, admins included.
+So: branch, push, `gh pr create`, wait for the check, merge.
+
 ## Deploy
 
-GitHub Actions builds `ghcr.io/<owner>/huginn` and `.../muninn` for amd64
-and arm64 on every push to main. On the Mac mini:
+GitHub Actions builds `ghcr.io/turbinebmw/huginn` and `.../muninn` for
+amd64 and arm64 on every push to main (public images, so the mini pulls
+them without a token). On the Mac mini:
 
 ```sh
 cd deploy && RAVENS_TAG=<commit or main> docker compose up -d
