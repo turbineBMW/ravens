@@ -1,0 +1,12 @@
+[package]
+name = "raven-core"
+description = "Types shared by Huginn and Muninn: identity, cross-app links, health."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

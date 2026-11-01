@@ -1,0 +1,252 @@
+@import '@ravens/ui/tokens.css';
+@import '@ravens/ui/base.css';
+
+/* Huginn's own look on top of the shared shell. */
+
+.sync {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 25%, transparent);
+}
+.sync.online {
+    background: var(--ok);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent);
+}
+.sync.offline {
+    background: var(--warn);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent);
+}
+
+/* ---- notes page ---- */
+.notes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+}
+.note-card {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    min-height: 96px;
+}
+.note-card h2 {
+    margin: 0 0 6px;
+    font-size: 1.05rem;
+}
+.note-card .preview {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--muted);
+    font-size: 0.95rem;
+}
+.note-card .preview li::before {
+    content: '○ ';
+    opacity: 0.6;
+}
+.note-card .preview li.more::before {
+    content: '';
+}
+.note-card .meta {
+    margin: 8px 0 0;
+}
+.empty {
+    text-align: center;
+    padding: 32px 16px;
+}
+.fab {
+    position: fixed;
+    right: 20px;
+    bottom: calc(20px + env(safe-area-inset-bottom));
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 30px;
+    line-height: 1;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+}
+
+/* ---- one list ---- */
+.note {
+    max-width: 640px;
+    margin: 0 auto;
+}
+.note-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.note-head .title {
+    flex: 1;
+    min-width: 0;
+    font-size: 1.4rem;
+    font-weight: 600;
+    padding: 8px 4px;
+    border: none;
+    background: transparent;
+    outline: none;
+}
+.sheet.actions {
+    display: grid;
+    gap: 6px;
+}
+.btn.danger {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.checklist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.checklist li {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: var(--tap);
+    padding: 0 4px 0 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+}
+.checklist li:last-child {
+    border-bottom: none;
+}
+.checklist li.dragging {
+    position: relative;
+    z-index: 2;
+    box-shadow: var(--shadow);
+    background: var(--panel-2);
+}
+.checklist.is-dragging {
+    user-select: none;
+}
+.checklist .handle {
+    width: 36px;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 14px;
+    letter-spacing: -2px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+.checklist .handle.blank {
+    cursor: default;
+}
+.checklist .check {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--tap);
+    height: var(--tap);
+}
+.checklist .check input {
+    width: 22px;
+    height: 22px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+.checklist .plus {
+    width: var(--tap);
+    text-align: center;
+    color: var(--muted);
+    font-size: 22px;
+}
+.checklist .text {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 4px;
+    border: none;
+    background: transparent;
+    outline: none;
+}
+.checklist li.done .text {
+    color: var(--muted);
+    text-decoration: line-through;
+}
+.checklist .remind {
+    width: 36px;
+    height: var(--tap);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    font-size: 16px;
+    opacity: 0;
+    filter: grayscale(1);
+}
+.checklist li:hover .remind,
+.checklist li:focus-within .remind {
+    opacity: 0.8;
+}
+@media (hover: none) {
+    .checklist .remind {
+        opacity: 0.5;
+    }
+}
+.reminders {
+    margin: 0 0 8px;
+    color: var(--muted);
+}
+.reminders a {
+    color: var(--accent);
+    text-decoration: none;
+}
+.checklist .remove {
+    width: var(--tap);
+    height: var(--tap);
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 22px;
+    cursor: pointer;
+    opacity: 0;
+}
+.checklist li:hover .remove,
+.checklist li:focus-within .remove {
+    opacity: 1;
+}
+@media (hover: none) {
+    .checklist .remove {
+        opacity: 0.6;
+    }
+}
+.checklist li.divider {
+    background: var(--panel-2);
+}
+.divider-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: var(--tap);
+    padding: 0 12px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    text-align: left;
+}
+.divider-btn .chev {
+    display: inline-block;
+    transition: transform 0.15s;
+    font-size: 20px;
+}
+.divider-btn .chev.open {
+    transform: rotate(90deg);
+}

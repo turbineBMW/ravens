@@ -1,0 +1,18 @@
+{
+    "name": "ravens",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "description": "Huginn (notes) and Muninn (reminders) web clients plus the UI code they share.",
+    "workspaces": ["shared/ui", "huginn/web", "muninn/web"],
+    "scripts": {
+        "build": "npm run build --workspaces --if-present",
+        "check": "npm run check --workspaces --if-present",
+        "dev:huginn": "npm run dev -w huginn/web",
+        "dev:muninn": "npm run dev -w muninn/web"
+    },
+    "devDependencies": {
+        "prettier": "^3.3.3",
+        "prettier-plugin-svelte": "^3.2.6"
+    }
+}

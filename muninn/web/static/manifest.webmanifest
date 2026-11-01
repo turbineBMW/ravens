@@ -1,0 +1,17 @@
+{
+    "name": "Muninn",
+    "short_name": "Muninn",
+    "description": "Memory: reminders, tasks, schedules.",
+    "id": "/muninn/",
+    "start_url": "/muninn/",
+    "scope": "/muninn/",
+    "display": "standalone",
+    "orientation": "any",
+    "background_color": "#7a4a9e",
+    "theme_color": "#7a4a9e",
+    "icons": [
+        { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+        { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+        { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+    ]
+}

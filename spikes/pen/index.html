@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Pen spike</title>
+<style>
+  :root { --bg:#14181d; --panel:#1c2229; --text:#e7ebef; --muted:#98a3af; --line:#2e3742; --accent:#3ec59a; --warn:#e5a04a; --bad:#ef6b5e; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f4f5f7; --panel:#fff; --text:#1d2229; --muted:#5b6573; --line:#dde1e6; --accent:#0b7a5c; --warn:#b7640a; --bad:#c0392b; } }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font: 14px/1.4 system-ui, sans-serif; overflow:hidden; }
+  #canvas { position:fixed; inset:0; width:100vw; height:100vh; touch-action:none; display:block; background:var(--bg); }
+  #hud { position:fixed; top:8px; left:8px; right:8px; display:flex; flex-wrap:wrap; gap:8px; pointer-events:none; }
+  #hud > * { pointer-events:auto; }
+  .panel { background:color-mix(in srgb, var(--panel) 88%, transparent); border:1px solid var(--line); border-radius:10px; padding:8px 10px; backdrop-filter: blur(6px); }
+  .live { font-family: ui-monospace, monospace; font-size:12px; white-space:pre; min-width: 260px; }
+  table { border-collapse: collapse; font-size:12px; }
+  td, th { padding:2px 8px; text-align:left; border-bottom:1px solid var(--line); }
+  .ok { color: var(--accent); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  button { min-height:44px; min-width:44px; padding:0 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--text); font:inherit; }
+  #report { display:none; position:fixed; left:8px; right:8px; bottom:8px; max-height:45vh; overflow:auto; font-family: ui-monospace, monospace; font-size:11px; white-space:pre-wrap; }
+  .hint { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="hud">
+  <div class="panel live" id="live">waiting for a pointer…</div>
+  <div class="panel"><table id="seen"><thead><tr><th>type</th><th>events</th><th>pressure min–max</th><th>tilt</th><th>coalesced/ev</th><th>hover</th><th>eraser</th></tr></thead><tbody></tbody></table>
+    <div class="hint" style="margin-top:6px">Pen draws (width follows pressure). One finger pans, two pinch. Mouse draws too. Verdict appears when a pen has drawn.</div>
+    <div id="verdict" style="margin-top:6px"></div>
+  </div>
+  <div class="panel" style="display:flex; gap:8px; align-items:center">
+    <button id="clear">Clear</button>
+    <button id="toggleReport">Report</button>
+    <span class="hint" id="env"></span>
+  </div>
+</div>
+<pre id="report" class="panel"></pre>
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  // desynchronized: lower latency where the platform supports it (Android Chrome; some Linux GPU paths).
+  const ctx = canvas.getContext('2d', { desynchronized: true, alpha: false });
+  const attrs = ctx.getContextAttributes ? ctx.getContextAttributes() : {};
+  const dpr = () => window.devicePixelRatio || 1;
+  const strokes = []; // { type, points:[{x,y,p}] } in world coords
+  const view = { x: 0, y: 0, scale: 1 };
+  let active = null;      // the drawing pointer: { id, stroke }
+  const touches = new Map(); // id -> {x,y} for pan/pinch
+  let lastPinch = null;
+
+  const stats = {}; // per pointerType
+  function stat(t) {
+    return stats[t] ??= { events: 0, pmin: Infinity, pmax: -Infinity, pdistinct: new Set(), tilt: false, coalesced: 0, coalescedEvents: 0, hover: false, eraser: false, predicted: 0, rateSamples: [] };
+  }
+  let lastT = 0;
+  const live = document.getElementById('live');
+  const fmt = (n, d = 2) => (typeof n === 'number' ? n.toFixed(d) : String(n));
+
+  function resize() {
+    const r = dpr();
+    canvas.width = Math.round(innerWidth * r); canvas.height = Math.round(innerHeight * r);
+    redraw();
+  }
+  addEventListener('resize', resize);
+
+  function worldToScreen(p) { return { x: (p.x - view.x) * view.scale, y: (p.y - view.y) * view.scale }; }
+  function screenToWorld(x, y) { return { x: x / view.scale + view.x, y: y / view.scale + view.y }; }
+
+  function width(p, type) {
+    const base = type === 'pen' ? 6 : 3;
+    // Mice report 0.5 constant; a pen with no pressure support reports 0.5 too (that is the thing we are testing).
+    return base * (0.15 + 1.7 * p);
+  }
+  function drawSegment(a, b, type) {
+    const r = dpr();
+    const A = worldToScreen(a), B = worldToScreen(b);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = type === 'pen' ? '#3ec59a' : type === 'mouse' ? '#5fb2e6' : '#e5a04a';
+    ctx.lineWidth = width((a.p + b.p) / 2, type) * view.scale * r;
+    ctx.beginPath(); ctx.moveTo(A.x * r, A.y * r); ctx.lineTo(B.x * r, B.y * r); ctx.stroke();
+  }
+  function redraw() {
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (const s of strokes) for (let i = 1; i < s.points.length; i++) drawSegment(s.points[i - 1], s.points[i], s.type);
+  }
+
+  function record(e) {
+    const s = stat(e.pointerType || 'unknown');
+    s.events++;
+    const co = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents().length : 0;
+    if (e.type === 'pointermove') { s.coalesced += co; s.coalescedEvents++; }
+    const pr = typeof e.getPredictedEvents === 'function' ? e.getPredictedEvents().length : 0;
+    s.predicted = Math.max(s.predicted, pr);
+    if (e.buttons !== 0 || e.type === 'pointerdown') {
+      s.pmin = Math.min(s.pmin, e.pressure); s.pmax = Math.max(s.pmax, e.pressure);
+      if (s.pdistinct.size < 50) s.pdistinct.add(Math.round(e.pressure * 100));
+    }
+    if (e.tiltX || e.tiltY) s.tilt = true;
+    if (e.pointerType === 'pen' && e.buttons === 0 && e.type === 'pointermove') s.hover = true;
+    if (e.button === 5 || (e.buttons & 32)) s.eraser = true;
+    if (e.type === 'pointermove' && lastT) { const dt = e.timeStamp - lastT; if (dt > 0 && dt < 100) s.rateSamples.push(dt); if (s.rateSamples.length > 400) s.rateSamples.shift(); }
+    lastT = e.timeStamp;
+    live.textContent =
+`type      ${e.pointerType}  id ${e.pointerId}  ${e.type}
+pressure  ${fmt(e.pressure, 3)}   buttons ${e.buttons} button ${e.button}
+tilt      ${e.tiltX}/${e.tiltY}   twist ${e.twist}   alt ${e.altitudeAngle !== undefined ? fmt(e.altitudeAngle) : '-'}
+size      ${fmt(e.width, 1)}x${fmt(e.height, 1)}   coalesced ${co}   predicted ${pr}
+primary   ${e.isPrimary}   tangential ${e.tangentialPressure}`;
+    renderSeen();
+  }
+  function renderSeen() {
+    const tb = document.querySelector('#seen tbody'); tb.innerHTML = '';
+    for (const [t, s] of Object.entries(stats)) {
+      const tr = document.createElement('tr');
+      const rate = s.rateSamples.length ? Math.round(1000 / (s.rateSamples.reduce((a, b) => a + b, 0) / s.rateSamples.length)) : 0;
+      const pr = s.pmin === Infinity ? '-' : `${fmt(s.pmin)}–${fmt(s.pmax)} (${s.pdistinct.size} levels)`;
+      tr.innerHTML = `<td>${t}</td><td>${s.events}${rate ? ` @${rate}Hz` : ''}</td><td>${pr}</td><td>${s.tilt ? 'yes' : 'no'}</td><td>${s.coalescedEvents ? (s.coalesced / s.coalescedEvents).toFixed(1) : '-'}${s.predicted ? ` (+${s.predicted} pred)` : ''}</td><td>${s.hover ? 'yes' : 'no'}</td><td>${s.eraser ? 'yes' : 'no'}</td>`;
+      tb.appendChild(tr);
+    }
+    const pen = stats.pen;
+    const v = document.getElementById('verdict');
+    if (!pen || pen.pmin === Infinity) { v.innerHTML = ''; return; }
+    const levels = pen.pdistinct.size;
+    const ok = levels >= 8;
+    v.innerHTML = ok
+      ? `<span class="ok">✔ Pen pressure arrives (${levels}+ distinct levels${pen.tilt ? ', tilt too' : ', no tilt'}${pen.hover ? ', hover works' : ''}). The web frontend is a go on this device.</span>`
+      : `<span class="${levels <= 1 ? 'bad' : 'warn'}">${levels <= 1 ? '✘' : '△'} Pen reports ${levels} pressure level${levels === 1 ? '' : 's'} (${fmt(pen.pmin)}–${fmt(pen.pmax)}). Press harder and lighter; if it stays flat, this browser is not passing tablet pressure through.</span>`;
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    record(e);
+    if (e.pointerType === 'touch') { touches.set(e.pointerId, { x: e.clientX, y: e.clientY }); lastPinch = null; return; }
+    canvas.setPointerCapture(e.pointerId);
+    const w = screenToWorld(e.clientX, e.clientY);
+    active = { id: e.pointerId, stroke: { type: e.pointerType, points: [{ ...w, p: e.pressure }] } };
+    strokes.push(active.stroke);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    record(e);
+    if (e.pointerType === 'touch') {
+      if (!touches.has(e.pointerId)) return;
+      const prev = touches.get(e.pointerId); touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.size === 1) { view.x -= (e.clientX - prev.x) / view.scale; view.y -= (e.clientY - prev.y) / view.scale; redraw(); }
+      else if (touches.size === 2) {
+        const [a, b] = [...touches.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+        if (lastPinch) {
+          const before = screenToWorld(cx, cy);
+          view.scale = Math.min(8, Math.max(0.2, view.scale * (d / lastPinch.d)));
+          const after = screenToWorld(cx, cy);
+          view.x += before.x - after.x; view.y += before.y - after.y;
+          view.x -= (cx - lastPinch.cx) / view.scale; view.y -= (cy - lastPinch.cy) / view.scale;
+          redraw();
+        }
+        lastPinch = { d, cx, cy };
+      }
+      return;
+    }
+    if (!active || e.pointerId !== active.id || e.buttons === 0) return;
+    const evs = typeof e.getCoalescedEvents === 'function' && e.getCoalescedEvents().length ? e.getCoalescedEvents() : [e];
+    for (const s of evs) {
+      const w = { ...screenToWorld(s.clientX, s.clientY), p: s.pressure };
+      const pts = active.stroke.points; pts.push(w);
+      drawSegment(pts[pts.length - 2], w, active.stroke.type);
+    }
+  });
+  const end = (e) => {
+    record(e);
+    if (e.pointerType === 'touch') { touches.delete(e.pointerId); lastPinch = null; return; }
+    if (active && e.pointerId === active.id) active = null;
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('lostpointercapture', (e) => { if (active && e.pointerId === active.id) active = null; });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  document.getElementById('clear').onclick = () => { strokes.length = 0; redraw(); };
+  const report = document.getElementById('report');
+  document.getElementById('toggleReport').onclick = () => {
+    const out = {
+      userAgent: navigator.userAgent,
+      platform: navigator.userAgentData?.platform ?? navigator.platform,
+      devicePixelRatio: dpr(),
+      maxTouchPoints: navigator.maxTouchPoints,
+      canvasDesynchronized: attrs.desynchronized ?? 'unknown',
+      coalescedEventsSupported: 'getCoalescedEvents' in PointerEvent.prototype,
+      predictedEventsSupported: 'getPredictedEvents' in PointerEvent.prototype,
+      pointers: Object.fromEntries(Object.entries(stats).map(([t, s]) => [t, {
+        events: s.events, pressureMin: s.pmin === Infinity ? null : s.pmin, pressureMax: s.pmax === -Infinity ? null : s.pmax,
+        pressureLevels: s.pdistinct.size, tilt: s.tilt, hover: s.hover, eraser: s.eraser,
+        coalescedPerEvent: s.coalescedEvents ? +(s.coalesced / s.coalescedEvents).toFixed(2) : null, predictedMax: s.predicted,
+        rateHz: s.rateSamples.length ? Math.round(1000 / (s.rateSamples.reduce((a, b) => a + b, 0) / s.rateSamples.length)) : null
+      }]))
+    };
+    report.textContent = JSON.stringify(out, null, 2);
+    report.style.display = report.style.display === 'block' ? 'none' : 'block';
+  };
+  document.getElementById('env').textContent = `${navigator.userAgentData?.platform ?? navigator.platform} · dpr ${dpr()} · desync ${attrs.desynchronized ?? '?'}`;
+  resize();
+})();
+</script>
+</body>
+</html>

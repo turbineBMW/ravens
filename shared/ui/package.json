@@ -1,0 +1,25 @@
+{
+    "name": "@ravens/ui",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "description": "What Huginn's and Muninn's web clients share: the Omarchy theme, the base palette, pointer helpers, the API client.",
+    "exports": {
+        "./omarchy": "./src/omarchy.ts",
+        "./pointer": "./src/pointer.ts",
+        "./api": "./src/api.ts",
+        "./tokens.css": "./src/tokens.css",
+        "./base.css": "./src/base.css",
+        "./sync": "./src/sync.ts",
+        "./reorder": "./src/reorder.ts"
+    },
+    "peerDependencies": {
+        "svelte": "^5.0.0"
+    },
+    "dependencies": {
+        "fractional-indexing": "^4.0.0",
+        "y-indexeddb": "^9.0.12",
+        "y-websocket": "^3.1.0",
+        "yjs": "^13.6.33"
+    }
+}

@@ -1,0 +1,28 @@
+# Huginn and Muninn: two deployables, one workspace. The shared crates hold
+# everything both servers do the same way (config, SQLite, identity, the
+# static web client, health); each app's crate is its own data model and API.
+[workspace]
+resolver = "2"
+members = ["shared/raven-core", "shared/raven-server", "huginn/server", "muninn/server", "muninn/agent"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+raven-core = { path = "shared/raven-core" }
+raven-server = { path = "shared/raven-server" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["trace", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

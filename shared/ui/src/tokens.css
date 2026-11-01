@@ -1,0 +1,45 @@
+/*
+ * The palette every raven page is painted with. The Omarchy theme, when on,
+ * sets the same names inline on <html> (omarchy.ts) and so wins over both of
+ * these. Keep every colour in the UI a token; never a literal.
+ */
+:root {
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --panel-2: #f0f2f5;
+    --text: #1d2229;
+    --muted: #5b6573;
+    --line: #dde1e6;
+    --accent: #0b7a5c;
+    --accent-2: #0c5e8c;
+    --on-accent: #ffffff;
+    --danger: #c0392b;
+    --warn: #b7640a;
+    --ok: #1d7a3c;
+    --ink: #1d2229;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 14px rgb(0 0 0 / 0.04);
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    /* Touch targets: nothing tappable is smaller than this. */
+    --tap: 44px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #14181d;
+        --panel: #1c2229;
+        --panel-2: #232a33;
+        --text: #e7ebef;
+        --muted: #98a3af;
+        --line: #2e3742;
+        --accent: #3ec59a;
+        --accent-2: #5fb2e6;
+        --on-accent: #0b1a14;
+        --danger: #ef6b5e;
+        --warn: #e5a04a;
+        --ok: #5ccf86;
+        --ink: #e7ebef;
+        --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    }
+}

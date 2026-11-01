@@ -1,0 +1,23 @@
+[package]
+name = "muninn-agent"
+description = "Reminders from Muninn as desktop notifications: follows the server's event stream and hands each one to the desktop notification daemon (omarchy-shell on Omarchy, mako or any other elsewhere)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "muninn-agent"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures-util = "0.3"
+# rustls so the binary has no OpenSSL dependency; the server's certificate is a
+# real Let's Encrypt one from tailscale serve.
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+notify-rust = "4"

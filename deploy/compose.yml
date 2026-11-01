@@ -1,0 +1,41 @@
+# Huginn and Muninn on the Mac mini: two containers, each bound to loopback
+# only, reached through `tailscale serve` (deploy/tailscale-serve.md), which
+# gives them HTTPS on brandons-mac-mini.tail339aa4.ts.net and stamps every
+# request with the tailnet user's identity. RAVEN_TRUST_IDENTITY_HEADERS is
+# safe exactly because nothing else can reach these ports.
+#
+#   cd deploy && RAVENS_TAG=<commit> docker compose up -d
+name: ravens
+
+x-raven: &raven
+    restart: always
+    environment:
+        - RAVEN_TRUST_IDENTITY_HEADERS=true
+        - RAVEN_LOG_LEVEL=info
+    healthcheck:
+        test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/health"]
+        interval: 15s
+        timeout: 5s
+        retries: 4
+        start_period: 10s
+
+services:
+    huginn:
+        <<: *raven
+        image: ghcr.io/turbinebmw/huginn:${RAVENS_TAG:-main}
+        ports:
+            - "127.0.0.1:8081:8080"
+        volumes:
+            - huginn_data:/data
+
+    muninn:
+        <<: *raven
+        image: ghcr.io/turbinebmw/muninn:${RAVENS_TAG:-main}
+        ports:
+            - "127.0.0.1:8082:8080"
+        volumes:
+            - muninn_data:/data
+
+volumes:
+    huginn_data:
+    muninn_data:

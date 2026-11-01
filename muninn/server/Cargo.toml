@@ -1,0 +1,29 @@
+[package]
+name = "muninn-server"
+description = "Muninn's server: its data model and API on top of raven-server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "muninn-server"
+path = "src/main.rs"
+
+[dependencies]
+raven-core = { workspace = true }
+raven-server = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+serde_json = { workspace = true }
+rusqlite = { workspace = true }
+tracing = { workspace = true }
+yrs = "0.28"
+serde = { workspace = true }
+web-push = { version = "0.11", features = ["hyper-client"] }
+chrono-tz = "0.10"
+p256 = "0.13"
+base64 = "0.22"
+rand = "0.8"
+chrono = { workspace = true }
+tokio = { workspace = true }
+futures-util = "0.3"

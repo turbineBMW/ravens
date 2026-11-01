@@ -1,0 +1,11 @@
+# Build both images from this checkout instead of pulling them:
+#   docker compose -f deploy/compose.yml -f deploy/compose.local.yml up -d --build
+services:
+    huginn:
+        build:
+            context: ..
+            args: { APP: huginn }
+    muninn:
+        build:
+            context: ..
+            args: { APP: muninn }

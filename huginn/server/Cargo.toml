@@ -1,0 +1,16 @@
+[package]
+name = "huginn-server"
+description = "Huginn's server: its data model and API on top of raven-server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "huginn-server"
+path = "src/main.rs"
+
+[dependencies]
+raven-core = { workspace = true }
+raven-server = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
