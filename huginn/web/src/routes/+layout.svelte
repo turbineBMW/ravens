@@ -6,6 +6,8 @@
     import type { HealthResponse, Identity } from '@ravens/ui/api';
     import { api } from '$lib/api';
     import { openIndex } from '$lib/notes';
+    import { page } from '$app/state';
+    import NotesList from '$lib/NotesList.svelte';
 
     let { children } = $props();
 
@@ -16,15 +18,25 @@
     const status = index.doc.status;
     const synced = index.doc.synced;
 
+    let listWidth = $state(300);
+    function saveWidth(value: string) {
+        listWidth = Number(value);
+        try {
+            localStorage.setItem('huginn-list-width', value);
+        } catch {
+            /* Storage may be unavailable. */
+        }
+    }
+
     let me = $state<Identity | null>(null);
     let meError = $state('');
     let health = $state<HealthResponse | null>(null);
     let installPrompt = $state<Window['__installPrompt'] | null>(null);
 
     const statusHint: Record<string, string> = {
-        online: 'Connected: changes sync as you make them.',
+        online: 'Library connected to the server.',
         connecting: 'Connecting to the server…',
-        offline: 'Offline: changes are kept on this device and sync when the server is back.',
+        offline: 'Library offline. Reconnect to sync with other devices.',
     };
 
     async function install() {
@@ -33,6 +45,12 @@
     }
 
     onMount(() => {
+        try {
+            const stored = Number(localStorage.getItem('huginn-list-width'));
+            if (stored >= 280 && stored <= 360) listWidth = stored;
+        } catch {
+            /* Use the default width. */
+        }
         api.me().then(
             (id) => (me = id),
             (e) => (meError = e instanceof Error ? e.message : String(e)),
@@ -85,6 +103,17 @@
                     </span>
                 </span>
             </label>
+            <label class="wide-setting small"
+                >Notes list width
+                <input
+                    type="range"
+                    min="280"
+                    max="360"
+                    step="10"
+                    value={listWidth}
+                    oninput={(e) => saveWidth(e.currentTarget.value)}
+                />
+            </label>
             {#if installPrompt}
                 <button class="btn" type="button" onclick={() => void install()}>Install as an app</button>
             {/if}
@@ -98,6 +127,11 @@
     </details>
 </header>
 
-<main>
-    {@render children()}
+<main style:--list-width={`${listWidth}px`} class="workspace" class:has-selection={!!page.params.id}>
+    <aside class="notes-pane" aria-label="Notes library">
+        <NotesList {index} />
+    </aside>
+    <section class="editor-pane" aria-label="Selected note">
+        {@render children()}
+    </section>
 </main>

@@ -26,6 +26,8 @@ export interface NoteMeta {
     created: number;
     updated: number;
     pinned: boolean;
+    /** Zero for active notes; otherwise retained in Recently Deleted until restored. */
+    deletedAt: number;
     /** The first open items, one per line, for the card on the notes page. */
     preview: string;
     open: number;
@@ -51,6 +53,7 @@ export interface Index {
     create(kind: NoteKind): string;
     touch(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done'>>): void;
     remove(id: string): void;
+    restore(id: string): void;
     release(): void;
 }
 
@@ -62,6 +65,7 @@ function readMeta(id: string, m: YNoteMeta): NoteMeta {
         created: Number(m.get('created') ?? 0),
         updated: Number(m.get('updated') ?? 0),
         pinned: Boolean(m.get('pinned') ?? false),
+        deletedAt: Number(m.get('deletedAt') ?? 0),
         preview: String(m.get('preview') ?? ''),
         open: Number(m.get('open') ?? 0),
         done: Number(m.get('done') ?? 0),
@@ -105,7 +109,10 @@ export function openIndex(): Index {
             });
         },
         remove(id) {
-            map.delete(id);
+            map.get(id)?.set('deletedAt', Date.now());
+        },
+        restore(id) {
+            map.get(id)?.set('deletedAt', 0);
         },
         release: () => doc.release(),
     };
@@ -142,8 +149,10 @@ function readItem(id: string, m: YItem): Item {
 }
 
 export function sortItems(all: Item[]): Item[] {
-    const open = all.filter((i) => !i.checked).sort((a, b) => (a.pos < b.pos ? -1 : a.pos > b.pos ? 1 : 0));
-    const done = all.filter((i) => i.checked).sort((a, b) => a.checkedAt - b.checkedAt);
+    const open = all
+        .filter((i) => !i.checked)
+        .sort((a, b) => (a.pos < b.pos ? -1 : a.pos > b.pos ? 1 : a.id.localeCompare(b.id)));
+    const done = all.filter((i) => i.checked).sort((a, b) => a.checkedAt - b.checkedAt || a.id.localeCompare(b.id));
     return [...open, ...done];
 }
 

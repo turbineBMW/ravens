@@ -1,35 +1,70 @@
 <script lang="ts">
-    import { getContext } from 'svelte';
+    import { getContext, onMount } from 'svelte';
     import { goto } from '$app/navigation';
     import { base } from '$app/paths';
     import { page } from '$app/state';
     import NoteEditor from '$lib/NoteEditor.svelte';
-    import { openNote, type Index, type Note } from '$lib/notes';
+    import NoteSession from '$lib/NoteSession.svelte';
+    import { type Index } from '$lib/notes';
 
     const index = getContext<Index>('index');
-
-    let note = $state<Note | null>(null);
-
-    // The route's id can change while this component stays mounted (back/forward).
-    $effect(() => {
-        const id = page.params.id;
-        if (!id) return;
-        const n = openNote(id, index);
-        note = n;
-        return () => {
-            n.release();
-            if (note === n) note = null;
-        };
+    const notes = index.notes;
+    const synced = index.doc.synced;
+    let ready = $state(false);
+    let loadError = $state(false);
+    const entry = $derived($notes.find((n) => n.id === page.params.id));
+    const back = $derived(`${base}/${page.url.searchParams.get('view') === 'trash' ? '?view=trash' : ''}`);
+    onMount(() => {
+        void index.doc.whenLocal.then(
+            () => {
+                ready = true;
+            },
+            () => {
+                loadError = true;
+            },
+        );
     });
 
     function deleteList() {
-        const id = page.params.id;
-        if (!id) return;
-        index.remove(id);
+        if (!entry) return;
+        index.remove(entry.id);
         void goto(`${base}/`);
     }
 </script>
 
-{#if note}
-    <NoteEditor {note} id={page.params.id ?? ''} ondelete={deleteList} />
+<div class="editor-navigation"><a class="btn" href={back}>‹ Notes</a></div>
+{#if loadError}
+    <p role="alert">Could not open local storage. Reload to try again.</p>
+{:else if !ready}
+    <p role="status">Loading your library…</p>
+{:else if entry?.deletedAt}
+    <div class="workspace-empty">
+        <h2>{entry.title || 'Untitled list'}</h2>
+        <p class="muted">This note is in Recently Deleted.</p>
+        <button
+            class="btn primary"
+            type="button"
+            onclick={() => {
+                if (entry) {
+                    index.restore(entry.id);
+                    void goto(`${base}/n/${entry.id}`);
+                }
+            }}>Restore note</button
+        >
+    </div>
+{:else if entry}
+    {#key entry.id}
+        <NoteSession id={entry.id} {index}>
+            {#snippet children(note)}<NoteEditor {note} id={entry.id} ondelete={deleteList} />{/snippet}
+        </NoteSession>
+    {/key}
+{:else}
+    <div class="workspace-empty">
+        <h2>{$synced ? 'Note not found' : 'Note unavailable on this device'}</h2>
+        <p class="muted">
+            {$synced
+                ? 'It may have been removed. Check Recently Deleted in the library.'
+                : 'Reconnect to load your library and try again.'}
+        </p>
+    </div>
 {/if}

@@ -11,7 +11,12 @@
     import { remindMeHref } from '$lib/links';
     import type { Item, Note } from '$lib/notes';
 
-    let { items, note, noteId, noteTitle = '' }: { items: Item[]; note: Note; noteId: string; noteTitle?: string } = $props();
+    let {
+        items,
+        note,
+        noteId,
+        noteTitle = '',
+    }: { items: Item[]; note: Note; noteId: string; noteTitle?: string } = $props();
 
     // A link into the note (from a Muninn reminder) names the item in the hash.
     onMount(() => {
@@ -61,7 +66,17 @@
 
     function onItemKey(e: KeyboardEvent, item: Item, index: number) {
         const input = e.currentTarget as HTMLInputElement;
-        if (e.key === 'Enter') {
+        if (e.isComposing) return;
+        if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && !item.checked) {
+            e.preventDefault();
+            const ids = openOrdered.map((i) => i.id);
+            const at = ids.indexOf(item.id);
+            const to = at + (e.key === 'ArrowUp' ? -1 : 1);
+            if (to < 0 || to >= ids.length) return;
+            ids.splice(at, 1);
+            ids.splice(to, 0, item.id);
+            note.move(item.id, ids[to - 1] ?? null, ids[to + 1] ?? null);
+        } else if (e.key === 'Enter') {
             e.preventDefault();
             if (item.checked) return;
             // Split at the caret: the tail becomes the next item.
@@ -87,7 +102,7 @@
         preview: (order) => (dragging = order ? { id: order.join('\n'), order } : null),
         commit: (id, before, after) => note.move(id, before, after),
         rows: () => [...document.querySelectorAll<HTMLElement>('ul.checklist li[data-reorder-row]:not(.done)')],
-        rowId: (row) => row.dataset.item
+        rowId: (row) => row.dataset.item,
     });
 </script>
 
@@ -120,6 +135,8 @@
                     type="text"
                     value={row.item.text}
                     placeholder="List item"
+                    aria-label="List item"
+                    title="Alt + Up or Down to reorder"
                     autocomplete="off"
                     autocapitalize="sentences"
                     enterkeyhint="next"
@@ -141,7 +158,7 @@
                     enterkeyhint="done"
                     bind:value={draft}
                     onkeydown={(e) => {
-                        if (e.key === 'Enter') {
+                        if (e.key === 'Enter' && !e.isComposing) {
                             e.preventDefault();
                             addFromDraft();
                         }
