@@ -78,10 +78,6 @@ say what happens to a synced note with no title and no items.
 
 ## Still to design
 
-- Several checklists in one note: a new top-level map per block is the likely
-  shape, with `items` staying the first.
-- Deleting a checklist block should delete its items, and copying one must not
-  leave two blocks sharing a map.
 - New notes: created with `meta.format` 2 and their body in one transaction. Only
   a note with no format and with a title key or items is treated as format 1, so
   a note that hasn't downloaded yet is never migrated by mistake.

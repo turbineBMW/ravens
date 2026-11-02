@@ -15,6 +15,8 @@
  * rich text whose `checklist` block shows the `items` map; items themselves are
  * unchanged from format 1, which has no `format` and no body. `meta.title` holds
  * only a title the user set: without one, the title is the note's first line.
+ * Format 3 is the same with more checklists, each its own top-level `items:<id>`
+ * map named by the block's `list` attribute.
  */
 import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
@@ -25,7 +27,12 @@ import { readable, type Readable } from 'svelte/store';
 export type NoteKind = 'checklist' | 'text';
 
 /** The newest note format this client can safely edit. */
-export const NOTE_FORMAT = 2;
+export const NOTE_FORMAT = 3;
+
+/** What migrated and new notes are: format 3 is only a note with more than the first list. */
+const BASE_FORMAT = 2;
+/** The checklist format 1 notes have. Others are named `items:<id>`. */
+const FIRST_LIST = 'items';
 
 /** Marks the migration, so undo and the index don't treat it as an edit. */
 const MIGRATION = 'huginn-migration';
@@ -222,7 +229,23 @@ export function openIndex(): Index {
 
 // ---------- one note ----------
 
-export interface Note {
+/** One checklist: an items map, by position, and the edits it allows. */
+export interface ChecklistModel {
+    /** Unchecked items by position, then checked items in the order they were checked. */
+    items: Readable<Item[]>;
+    /** Insert after `afterId` (or at the end); returns the new id. */
+    addItem(text: string, afterId?: string | null): string;
+    setText(id: string, text: string): void;
+    setChecked(id: string, checked: boolean): void;
+    /** Place `id` between its new neighbours in the unchecked list. */
+    move(id: string, beforeId: string | null, afterId: string | null): void;
+    remove(id: string): void;
+    uncheckAll(): void;
+    removeChecked(): void;
+}
+
+/** The note's own checklist members are its first list, the one format 1 notes have. */
+export interface Note extends ChecklistModel {
     doc: OpenDoc;
     /** The title the user set, if any. */
     title: Readable<string>;
@@ -234,8 +257,6 @@ export interface Note {
     hasChecklist: Readable<boolean>;
     /** Saved by a newer client: shown as unavailable, and every edit below does nothing. */
     tooNew: Readable<boolean>;
-    /** Unchecked items by position, then checked items in the order they were checked. */
-    items: Readable<Item[]>;
     setTitle(title: string): void;
     /** Give a brand new note its format and empty body. */
     initialise(): void;
@@ -243,15 +264,15 @@ export interface Note {
     migrate(synced: boolean): void;
     /** The note as plain text, for export. */
     plainText(): string;
-    /** Insert after `afterId` (or at the end); returns the new id. */
-    addItem(text: string, afterId?: string | null): string;
-    setText(id: string, text: string): void;
-    setChecked(id: string, checked: boolean): void;
-    /** Place `id` between its new neighbours in the unchecked list. */
-    move(id: string, beforeId: string | null, afterId: string | null): void;
-    remove(id: string): void;
-    uncheckAll(): void;
-    removeChecked(): void;
+    /** The checklist a body block points at. */
+    list(name: string): ChecklistModel;
+    /** The shared map behind a checklist, for undo. */
+    listMap(name: string): Y.Map<unknown>;
+    /** Prepare a new checklist for a block to point at; returns its name. */
+    newList(): string;
+    /** Check off nothing and everything: these two cover every checklist in the note. */
+    uncheckEverything(): void;
+    removeAllChecked(): void;
     /** Bring this note's entry in the index back in line with its contents. */
     repairIndex(): void;
     release(): void;
@@ -278,33 +299,42 @@ export function sortItems(all: Item[]): Item[] {
 export function openNote(id: string, index?: Index): Note {
     const doc = openDoc(base, `note:${id}`);
     const meta = doc.doc.getMap<string | number>('meta');
-    const items = doc.doc.getMap<YItem>('items');
+    const items = doc.doc.getMap<YItem>(FIRST_LIST);
 
-    const readAll = () => {
+    const readList = (map: Y.Map<YItem>) => {
         const all: Item[] = [];
-        items.forEach((m, iid) => all.push(readItem(iid, m)));
+        map.forEach((m, iid) => all.push(readItem(iid, m)));
         return sortItems(all);
     };
-    const openPositions = () =>
-        readAll()
-            .filter((i) => !i.checked)
-            .map((i) => i.pos);
+    const readAll = () => readList(items);
 
     const body = doc.doc.getXmlFragment('body');
     const isTooNew = () => Number(meta.get('format') ?? 0) > NOTE_FORMAT;
     const blocks = () => body.toArray().filter((n): n is Y.XmlElement => n instanceof Y.XmlElement);
-    /** A format 1 note has no body, and all of it is its checklist. */
-    const showsChecklist = () => !meta.has('format') || blocks().some((block) => block.nodeName === 'checklist');
+    const listOf = (block: Y.XmlElement) => doc.doc.getMap<YItem>(block.getAttribute('list') || FIRST_LIST);
+    /** The lists the note shows, once each. A format 1 note has no body, and is all its first list. */
+    const shownLists = () => {
+        if (!meta.has('format')) return [items];
+        return [
+            ...new Set(
+                blocks()
+                    .filter((b) => b.nodeName === 'checklist')
+                    .map(listOf),
+            ),
+        ];
+    };
 
     /** The note's text, line by line, with the open checklist items where the checklist is. */
     const textLines = () => {
-        const openItems = () =>
-            readAll()
+        const openItems = (map: Y.Map<YItem>) =>
+            readList(map)
                 .filter((i) => !i.checked)
                 .map((i) => i.text);
         const lines = meta.has('format')
-            ? blocks().flatMap((block) => (block.nodeName === 'checklist' ? openItems() : blockLines(block, false)))
-            : openItems();
+            ? blocks().flatMap((block) =>
+                  block.nodeName === 'checklist' ? openItems(listOf(block)) : blockLines(block, false),
+              )
+            : openItems(items);
         return lines.map((line) => line.trim()).filter(Boolean);
     };
 
@@ -312,7 +342,7 @@ export function openNote(id: string, index?: Index): Note {
     const summary = () => {
         const explicit = String(meta.get('title') ?? '').trim();
         const lines = textLines();
-        const all = showsChecklist() ? readAll() : [];
+        const all = shownLists().flatMap(readList);
         const open = all.filter((i) => !i.checked).length;
         return {
             // Without a set title, the first line is the title and not also the preview.
@@ -341,18 +371,114 @@ export function openNote(id: string, index?: Index): Note {
     };
     body.observeDeep(onBody);
 
+    const lists = new Map<string, ChecklistModel>();
+    const list = (name: string): ChecklistModel => {
+        const cached = lists.get(name);
+        if (cached) return cached;
+        const map = doc.doc.getMap<YItem>(name);
+        const readThis = () => readList(map);
+        const openPositions = () =>
+            readThis()
+                .filter((i) => !i.checked)
+                .map((i) => i.pos);
+        const model: ChecklistModel = {
+            items: yStore(map, readThis),
+            addItem(text, afterId = null) {
+                if (isTooNew()) return '';
+                const iid = newId();
+                const open = readThis().filter((i) => !i.checked);
+                const at = afterId ? open.findIndex((i) => i.id === afterId) : open.length - 1;
+                const before = at >= 0 ? (open[at]?.pos ?? null) : null;
+                const after = at + 1 < open.length ? open[at + 1].pos : null;
+                const pos = generateKeyBetween(before, after);
+                doc.doc.transact(() => {
+                    const m = new Y.Map<string | number | boolean>();
+                    m.set('text', text);
+                    m.set('checked', false);
+                    m.set('checkedAt', 0);
+                    m.set('pos', pos);
+                    map.set(iid, m);
+                });
+                touched();
+                return iid;
+            },
+            setText(iid, text) {
+                if (isTooNew()) return;
+                map.get(iid)?.set('text', text);
+                touched();
+            },
+            setChecked(iid, checked) {
+                if (isTooNew()) return;
+                const m = map.get(iid);
+                if (!m) return;
+                doc.doc.transact(() => {
+                    m.set('checked', checked);
+                    m.set('checkedAt', checked ? Date.now() : 0);
+                    // Unchecking puts the item back at the end of the open list.
+                    if (!checked) {
+                        const positions = openPositions();
+                        m.set('pos', generateKeyBetween(positions[positions.length - 1] ?? null, null));
+                    }
+                });
+                touched();
+            },
+            move(iid, beforeId, afterId) {
+                if (isTooNew()) return;
+                const m = map.get(iid);
+                if (!m) return;
+                const before = beforeId ? String(map.get(beforeId)?.get('pos') ?? '') || null : null;
+                const after = afterId ? String(map.get(afterId)?.get('pos') ?? '') || null : null;
+                m.set('pos', generateKeyBetween(before, after));
+                touched();
+            },
+            remove(iid) {
+                if (isTooNew()) return;
+                map.delete(iid);
+                touched();
+            },
+            uncheckAll() {
+                if (isTooNew()) return;
+                doc.doc.transact(() => {
+                    let last = openPositions().pop() ?? null;
+                    for (const i of readThis().filter((i) => i.checked)) {
+                        const m = map.get(i.id)!;
+                        last = generateKeyBetween(last, null);
+                        m.set('checked', false);
+                        m.set('checkedAt', 0);
+                        m.set('pos', last);
+                    }
+                });
+                touched();
+            },
+            removeChecked() {
+                if (isTooNew()) return;
+                doc.doc.transact(() => {
+                    for (const i of readThis().filter((i) => i.checked)) map.delete(i.id);
+                });
+                touched();
+            },
+        };
+        lists.set(name, model);
+        return model;
+    };
+    const shownNames = () => {
+        if (!meta.has('format')) return [FIRST_LIST];
+        const named = blocks()
+            .filter((b) => b.nodeName === 'checklist')
+            .map((b) => b.getAttribute('list') || FIRST_LIST);
+        return [...new Set(named)];
+    };
+
     return {
         doc,
+        ...list(FIRST_LIST),
         title: yStore(meta, () => String(meta.get('title') ?? '')),
         firstLine: readable('', (set) => {
+            // Any list may hold the first line, and lists come and go, so watch the document.
             const update = () => set(textLines()[0] ?? '');
             update();
-            body.observeDeep(update);
-            items.observeDeep(update);
-            return () => {
-                body.unobserveDeep(update);
-                items.unobserveDeep(update);
-            };
+            doc.doc.on('update', update);
+            return () => doc.doc.off('update', update);
         }),
         format: yStore(meta, () => Number(meta.get('format') ?? 0)),
         body,
@@ -360,7 +486,7 @@ export function openNote(id: string, index?: Index): Note {
         tooNew: yStore(meta, isTooNew),
         initialise() {
             doc.doc.transact(() => {
-                meta.set('format', NOTE_FORMAT);
+                meta.set('format', BASE_FORMAT);
                 meta.set('title', '');
                 body.insert(0, [new Y.XmlElement('paragraph')]);
             }, MIGRATION);
@@ -379,7 +505,7 @@ export function openNote(id: string, index?: Index): Note {
             const explicit = String(meta.get('title') ?? '').trim();
             const lines = blocks().flatMap((block) =>
                 block.nodeName === 'checklist'
-                    ? readAll().map((i) => `[${i.checked ? 'x' : ' '}] ${i.text}`)
+                    ? readList(listOf(block)).map((i) => `[${i.checked ? 'x' : ' '}] ${i.text}`)
                     : blockLines(block, true),
             );
             return [...(explicit ? [explicit, ''] : []), ...lines].join('\n').trim() + '\n';
@@ -390,79 +516,18 @@ export function openNote(id: string, index?: Index): Note {
             meta.set('title', title);
             touched();
         },
-        addItem(text, afterId = null) {
-            if (isTooNew()) return '';
-            const iid = newId();
-            const open = readAll().filter((i) => !i.checked);
-            const at = afterId ? open.findIndex((i) => i.id === afterId) : open.length - 1;
-            const before = at >= 0 ? (open[at]?.pos ?? null) : null;
-            const after = at + 1 < open.length ? open[at + 1].pos : null;
-            const pos = generateKeyBetween(before, after);
-            doc.doc.transact(() => {
-                const m = new Y.Map<string | number | boolean>();
-                m.set('text', text);
-                m.set('checked', false);
-                m.set('checkedAt', 0);
-                m.set('pos', pos);
-                items.set(iid, m);
-            });
-            touched();
-            return iid;
+        list,
+        listMap: (name) => doc.doc.getMap(name),
+        newList() {
+            if (isTooNew()) return FIRST_LIST;
+            if (Number(meta.get('format') ?? 0) < NOTE_FORMAT) meta.set('format', NOTE_FORMAT);
+            return `${FIRST_LIST}:${newId()}`;
         },
-        setText(iid, text) {
-            if (isTooNew()) return;
-            items.get(iid)?.set('text', text);
-            touched();
+        uncheckEverything() {
+            for (const name of shownNames()) list(name).uncheckAll();
         },
-        setChecked(iid, checked) {
-            if (isTooNew()) return;
-            const m = items.get(iid);
-            if (!m) return;
-            doc.doc.transact(() => {
-                m.set('checked', checked);
-                m.set('checkedAt', checked ? Date.now() : 0);
-                // Unchecking puts the item back at the end of the open list.
-                if (!checked) {
-                    const positions = openPositions();
-                    m.set('pos', generateKeyBetween(positions[positions.length - 1] ?? null, null));
-                }
-            });
-            touched();
-        },
-        move(iid, beforeId, afterId) {
-            if (isTooNew()) return;
-            const m = items.get(iid);
-            if (!m) return;
-            const before = beforeId ? String(items.get(beforeId)?.get('pos') ?? '') || null : null;
-            const after = afterId ? String(items.get(afterId)?.get('pos') ?? '') || null : null;
-            m.set('pos', generateKeyBetween(before, after));
-            touched();
-        },
-        remove(iid) {
-            if (isTooNew()) return;
-            items.delete(iid);
-            touched();
-        },
-        uncheckAll() {
-            if (isTooNew()) return;
-            doc.doc.transact(() => {
-                let last = openPositions().pop() ?? null;
-                for (const i of readAll().filter((i) => i.checked)) {
-                    const m = items.get(i.id)!;
-                    last = generateKeyBetween(last, null);
-                    m.set('checked', false);
-                    m.set('checkedAt', 0);
-                    m.set('pos', last);
-                }
-            });
-            touched();
-        },
-        removeChecked() {
-            if (isTooNew()) return;
-            doc.doc.transact(() => {
-                for (const i of readAll().filter((i) => i.checked)) items.delete(i.id);
-            });
-            touched();
+        removeAllChecked() {
+            for (const name of shownNames()) list(name).removeChecked();
         },
         repairIndex() {
             // An empty document may just not be downloaded: it proves nothing.

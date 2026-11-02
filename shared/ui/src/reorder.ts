@@ -52,6 +52,11 @@ export function createReorder(hooks: ReorderHooks): Reorder {
             node.setPointerCapture(e.pointerId);
             current = { id, order: hooks.order(), row: row() };
             current.row?.classList.add('dragging');
+            // The preview can move this row in the DOM, which drops pointer capture,
+            // so the rest of the drag is followed on the window.
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+            window.addEventListener('pointercancel', up);
             e.preventDefault();
         }
         function move(e: PointerEvent) {
@@ -67,6 +72,7 @@ export function createReorder(hooks: ReorderHooks): Reorder {
         function up(e: PointerEvent) {
             if (pointerId !== e.pointerId) return;
             pointerId = null;
+            stopFollowing();
             if (current) {
                 current.row?.classList.remove('dragging');
                 const { order } = current;
@@ -78,17 +84,17 @@ export function createReorder(hooks: ReorderHooks): Reorder {
             current = null;
             hooks.preview(null);
         }
+        function stopFollowing() {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            window.removeEventListener('pointercancel', up);
+        }
         node.style.touchAction = 'none';
         node.addEventListener('pointerdown', down);
-        node.addEventListener('pointermove', move);
-        node.addEventListener('pointerup', up);
-        node.addEventListener('pointercancel', up);
         return {
             destroy() {
                 node.removeEventListener('pointerdown', down);
-                node.removeEventListener('pointermove', move);
-                node.removeEventListener('pointerup', up);
-                node.removeEventListener('pointercancel', up);
+                stopFollowing();
             },
         };
     }

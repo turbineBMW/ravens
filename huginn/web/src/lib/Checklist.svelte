@@ -9,14 +9,16 @@
     import { onMount, tick } from 'svelte';
     import { createReorder } from '@ravens/ui/reorder';
     import { remindMeHref } from '$lib/links';
-    import type { Item, Note } from '$lib/notes';
+    import type { ChecklistModel, Item } from '$lib/notes';
 
     let {
         items,
         note,
         noteId,
         noteTitle = '',
-    }: { items: Item[]; note: Note; noteId: string; noteTitle?: string } = $props();
+    }: { items: Item[]; note: ChecklistModel; noteId: string; noteTitle?: string } = $props();
+
+    let listElement: HTMLElement;
 
     // A link into the note (from a Muninn reminder) names the item in the hash.
     onMount(() => {
@@ -101,12 +103,12 @@
         order: () => open.map((i) => i.id),
         preview: (order) => (dragging = order ? { id: order.join('\n'), order } : null),
         commit: (id, before, after) => note.move(id, before, after),
-        rows: () => [...document.querySelectorAll<HTMLElement>('ul.checklist li[data-reorder-row]:not(.done)')],
+        rows: () => [...listElement.querySelectorAll<HTMLElement>('li[data-reorder-row]:not(.done)')],
         rowId: (row) => row.dataset.item,
     });
 </script>
 
-<ul class="checklist" class:is-dragging={!!dragging}>
+<ul class="checklist" class:is-dragging={!!dragging} bind:this={listElement}>
     {#each rows as row, index (row.id)}
         <li
             animate:flip={{ duration: 180 }}
