@@ -211,7 +211,9 @@ Size is relative engineering complexity: S small, M medium, L large, XL a substa
 
 **First increment, on the `huginn-phase-2` branch:** format 2 with its migration, `NOTE_FORMAT` and `CLIENT_VERSION` 2, and Huginn's `min_client` 2. New notes start as text. The editor has text styles, bold, italic, underline, strikethrough, highlight, monospaced text, links, bulleted and numbered lists with indenting, tables with row and column operations, divider lines, one checklist block per note, undo, and plain text export. The title is the first line unless one is set.
 
-Still to do in this phase: several checklists in a note, collapsible sections with stable IDs, selected-text-to-reminder, and rich/plain paste choices. Until several checklists exist, removing a checklist block keeps its items, so adding a checklist again brings them back, and two offline devices each adding one to the same note show the same list twice. Moving to format 2 cannot be undone by downgrading: rollback means restoring a backup.
+**Several checklists, on the `huginn-several-checklists` branch:** each new checklist block names its own `items:<id>` map, and format 1 notes keep `items`. A note becomes format 3 when it first gets one, `NOTE_FORMAT` and `CLIENT_VERSION` are 3, and Huginn's `min_client` is 3. Removing a block leaves its items stored but out of the note's text and counts; undo brings them back during the session.
+
+Still to do in this phase: collapsible sections with stable IDs, selected-text-to-reminder, and rich/plain paste choices. Moving to format 2 cannot be undone by downgrading: rollback means restoring a backup.
 
 **Size L. Dependency: P0 schema/migration contract, P1 shell.** This is the largest early product improvement.
 

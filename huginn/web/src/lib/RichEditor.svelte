@@ -2,8 +2,8 @@
     /**
      * The note's body: Tiptap on the note's Yjs fragment. Undo covers this
      * device's edits to the prose and the checklist together, and never another
-     * device's or the migration's. The checklist block only shows the items map,
-     * so pasted or dragged copies of it are refused rather than sharing that map.
+     * device's or the migration's. A checklist block only shows the items map it
+     * names, so pasted or dragged copies are refused rather than sharing that map.
      */
     import { Editor, Node, type CommandProps } from '@tiptap/core';
     import Collaboration from '@tiptap/extension-collaboration';
@@ -27,7 +27,6 @@
     let linkOpen = $state(false);
     let linkUrl = $state('');
     let linkInput = $state<HTMLInputElement>();
-    const hasChecklist = $derived(note.hasChecklist);
 
     const active = (name: string, attrs?: Record<string, unknown>) => {
         void revision;
@@ -93,19 +92,23 @@
             // Nothing parses into this node, so a paste can't make a second block.
             parseHTML: () => [],
             renderHTML: () => ['div', { 'data-checklist': '' }],
-            addNodeView: () => () => {
-                const dom = document.createElement('div');
-                dom.className = 'note-checklist';
-                dom.contentEditable = 'false';
-                const block = mount(ChecklistBlock, { target: dom, props: { note, id } });
-                return {
-                    dom,
-                    // The rows handle their own typing, clicks and drags.
-                    stopEvent: () => true,
-                    ignoreMutation: () => true,
-                    destroy: () => void unmount(block),
-                };
-            },
+            addNodeView:
+                () =>
+                ({ node }) => {
+                    const list = String(node.attrs.list);
+                    undo.addToScope(note.listMap(list));
+                    const dom = document.createElement('div');
+                    dom.className = 'note-checklist';
+                    dom.contentEditable = 'false';
+                    const block = mount(ChecklistBlock, { target: dom, props: { note, id, list } });
+                    return {
+                        dom,
+                        // The rows handle their own typing, clicks and drags.
+                        stopEvent: () => true,
+                        ignoreMutation: () => true,
+                        destroy: () => void unmount(block),
+                    };
+                },
         });
         const created = new Editor({
             element: host,
@@ -181,12 +184,12 @@
         !can((e) => e.can().liftListItem('listItem')),
     )}
     <span class="sep"></span>
-    {@render tool(
-        'Add checklist',
-        'Checklist',
-        () => chain().command(pastChecklist).insertContent({ type: 'checklist' }).command(pastChecklist).run(),
-        undefined,
-        $hasChecklist,
+    {@render tool('Add checklist', 'Checklist', () =>
+        chain()
+            .command(pastChecklist)
+            .insertContent({ type: 'checklist', attrs: { list: note.newList() } })
+            .command(pastChecklist)
+            .run(),
     )}
     {@render tool('Add table', 'Table', () =>
         chain().command(pastChecklist).insertTable({ rows: 2, cols: 2, withHeaderRow: false }).run(),

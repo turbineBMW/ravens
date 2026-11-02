@@ -102,7 +102,7 @@ const open = (id) => {
 };
 const entry = (id) => get(fixtureIndex.notes).find((n) => n.id === id);
 const groceries = open(GROCERIES);
-assert.equal(NOTE_FORMAT, 2);
+assert.equal(NOTE_FORMAT, 3);
 assert.equal(get(groceries.tooNew), false, 'a note without a format is format 1');
 assert.equal(get(groceries.title), 'Groceries');
 assert.deepEqual(
@@ -240,6 +240,79 @@ writeLines(['Third line']);
 fresh.release();
 assert.equal(entry(freshId).preview, 'Second line\nThird line');
 
+// Several checklists: each block has its own items, and the index counts those shown.
+const multiId = fixtureIndex.create('text');
+const multi = openNote(multiId, fixtureIndex);
+multi.initialise();
+assert.equal(get(multi.format), 2, 'a new note is format 2 until it needs more');
+const addBlock = () => {
+    const name = multi.newList();
+    const block = new Y.XmlElement('checklist');
+    block.setAttribute('list', name);
+    multi.doc.doc.transact(() => multi.body.insert(multi.body.length, [block]));
+    return name;
+};
+const listA = addBlock();
+const listB = addBlock();
+assert.notEqual(listA, listB);
+assert.equal(get(multi.format), 3, 'more lists mark the note for clients that understand them');
+const modelA = multi.list(listA);
+const modelB = multi.list(listB);
+assert.equal(multi.list(listA), modelA, 'one model per list');
+const inA = modelA.addItem('In A');
+modelB.addItem('In B one');
+const secondB = modelB.addItem('In B two');
+modelB.setChecked(secondB, true);
+assert.deepEqual(
+    get(modelA.items).map((i) => i.text),
+    ['In A'],
+);
+assert.deepEqual(
+    get(modelB.items).map((i) => i.text),
+    ['In B one', 'In B two'],
+);
+assert.equal(entry(multiId).title, 'In A');
+assert.equal(entry(multiId).preview, 'In B one');
+assert.deepEqual([entry(multiId).open, entry(multiId).done], [2, 1]);
+// Two devices each adding a checklist offline get two lists, not one list twice.
+const elsewhere = new Y.Doc();
+Y.applyUpdate(elsewhere, Y.encodeStateAsUpdate(multi.doc.doc));
+const elsewhereBlock = new Y.XmlElement('checklist');
+elsewhereBlock.setAttribute('list', 'items:elsewhere');
+elsewhere.getXmlFragment('body').insert(0, [elsewhereBlock]);
+Y.applyUpdate(multi.doc.doc, Y.encodeStateAsUpdate(elsewhere));
+assert.equal(multi.body.toArray().filter((n) => n.nodeName === 'checklist').length, 3);
+elsewhere.destroy();
+const multiText = multi.plainText();
+assert.ok(multiText.includes('[ ] In A') && multiText.includes('[x] In B two'), multiText);
+multi.uncheckEverything();
+assert.equal(
+    get(modelB.items).every((i) => !i.checked),
+    true,
+    'uncheck all covers every list',
+);
+modelA.setChecked(inA, true);
+modelB.setChecked(secondB, true);
+multi.removeAllChecked();
+assert.deepEqual(get(modelA.items), []);
+assert.deepEqual(
+    get(modelB.items).map((i) => i.text),
+    ['In B one'],
+);
+// Removing a block leaves its items out of the note's text and counts.
+const secondBlock = multi.body.toArray().findIndex((n) => n.getAttribute?.('list') === listB);
+multi.doc.doc.transact(() => multi.body.delete(secondBlock, 1));
+multi.repairIndex();
+assert.equal(entry(multiId).preview, '');
+assert.equal(entry(multiId).open, 0);
+// A newer client can't start a list either.
+const frozenMulti = openNote(multiId, fixtureIndex);
+frozenMulti.doc.doc.getMap('meta').set('format', NOTE_FORMAT + 1);
+const frozenState = stateOf(frozenMulti.doc.doc);
+modelA.addItem('Refused');
+frozenMulti.newList();
+assert.equal(stateOf(frozenMulti.doc.doc), frozenState);
+
 // Plain text keeps structure.
 groceries.setTitle('Groceries');
 const bold = new Y.XmlText();
@@ -279,7 +352,7 @@ newer.repairIndex();
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

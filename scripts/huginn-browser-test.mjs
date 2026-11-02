@@ -116,6 +116,21 @@ async function device() {
         js,
         errors,
         type: (text) => call('Input.insertText', { text }),
+        drag: async (from, to) => {
+            const mouse = (type, [x, y], buttons) =>
+                call('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 });
+            await mouse('mousePressed', from, 1);
+            for (let i = 1; i <= 6; i++) {
+                await mouse(
+                    'mouseMoved',
+                    [from[0] + ((to[0] - from[0]) * i) / 6, from[1] + ((to[1] - from[1]) * i) / 6],
+                    1,
+                );
+                await sleep(30);
+            }
+            await sleep(100);
+            await mouse('mouseReleased', to, 0);
+        },
         go: async (url) => {
             await call('Page.navigate', { url });
             await until(js, `document.querySelector('.headerbar') !== null`);
@@ -213,11 +228,6 @@ async function main() {
         add.click();
     })()`);
     await until(page.js, `document.querySelectorAll('.note-checklist').length === 1`);
-    assert.equal(
-        await page.js(`document.querySelector('.editor-toolbar [aria-label="Add checklist"]').disabled`),
-        true,
-        'one checklist for now',
-    );
     await page.js(`window.__editorEnd = document.querySelector('.tiptap'); window.__editorEnd.focus()`);
     await tool(page, 'Add table');
     await until(page.js, `${bodyHtml}.includes('<table')`);
@@ -239,6 +249,49 @@ async function main() {
     })()`);
     await until(page.js, `[...document.querySelectorAll('.checklist .text')].some((i) => i.value === 'Milk')`);
     await until(page.js, subtitleIs('Saved'));
+
+    // A second checklist is its own list: adding, Alt+arrow and dragging stay inside it.
+    await tool(page, 'Add checklist');
+    await until(page.js, `document.querySelectorAll('.note-checklist').length === 2`);
+    const addTo = (list, text) =>
+        page.js(`(() => {
+            const add = document.querySelectorAll('.note-checklist')[${list}].querySelector('input[placeholder="Add item"]');
+            add.value = ${JSON.stringify(text)};
+            add.dispatchEvent(new Event('input', { bubbles: true }));
+            add.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        })()`);
+    const listTexts = (list) =>
+        page.js(
+            `[...document.querySelectorAll('.note-checklist')[${list}].querySelectorAll('li[data-item] .text')].map((i) => i.value)`,
+        );
+    await addTo(1, 'Second A');
+    await addTo(1, 'Second B');
+    await until(
+        page.js,
+        `document.querySelectorAll('.note-checklist')[1].querySelectorAll('li[data-item]').length === 2`,
+    );
+    assert.deepEqual(await listTexts(0), ['Milk'], 'the first list is unchanged');
+    const dragRow = async (from, to) => {
+        await sleep(400); // Rows slide into place after a change.
+        const at = await page.js(`(() => {
+            const rows = document.querySelectorAll('.note-checklist')[1].querySelectorAll('li[data-item]');
+            const middle = (el) => { const r = el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; };
+            return { from: middle(rows[${from}].querySelector('.handle')), to: middle(rows[${to}]) };
+        })()`);
+        await page.drag(at.from, [at.to[0], at.to[1] + (to > from ? 20 : -20)]);
+    };
+    const firstRow = (text) =>
+        `document.querySelectorAll('.note-checklist')[1].querySelector('li[data-item] .text').value === '${text}'`;
+    // Each way: the browser moves a different row in the DOM depending on direction.
+    await dragRow(0, 1);
+    await until(page.js, firstRow('Second B'));
+    await dragRow(1, 0);
+    await until(page.js, firstRow('Second A'));
+    await dragRow(0, 1);
+    await until(page.js, firstRow('Second B'));
+    assert.deepEqual(await listTexts(1), ['Second B', 'Second A'], 'drag reorders within the list');
+    assert.deepEqual(await listTexts(0), ['Milk'], 'dragging leaves the other list alone');
+    await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
     await setTitle(page, 'Groceries, edited offline');
@@ -253,6 +306,11 @@ async function main() {
     await until(other.js, `${noteTitle} === 'Groceries, edited offline'`);
     await until(other.js, `[...document.querySelectorAll('.checklist .text')].some((i) => i.value === 'Milk')`);
     await until(other.js, `${bodyHtml}.includes('<table') && ${bodyHtml}.includes('First line of the note')`);
+    await until(other.js, `document.querySelectorAll('.note-checklist').length === 2`);
+    await until(
+        other.js,
+        `document.querySelectorAll('.note-checklist')[1].querySelector('li[data-item] .text')?.value === 'Second B'`,
+    );
 
     // A note the old code wrote opens with every item, once, on two devices.
     const seeded = await new Promise((resolve, reject) => {
@@ -362,7 +420,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

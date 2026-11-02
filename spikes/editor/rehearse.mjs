@@ -18,7 +18,7 @@ if (!base?.match(/^wss?:\/\//)) {
 
 function read(name) {
     return new Promise((resolve, reject) => {
-        const ws = new WebSocket(`${base}/${name}?v=2`);
+        const ws = new WebSocket(`${base}/${name}?v=3`);
         ws.binaryType = 'arraybuffer';
         const timer = setTimeout(() => {
             ws.close();

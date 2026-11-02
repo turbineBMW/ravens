@@ -33,8 +33,8 @@
     <div class="sheet actions">
         <a class="btn" href={remindMeHref(id, shownTitle)}>Remind me about this note…</a>
         {#if $hasChecklist}
-            <button class="btn" type="button" onclick={() => run(note.uncheckAll)}>Uncheck all</button>
-            <button class="btn" type="button" onclick={() => run(note.removeChecked)}>Delete checked items</button>
+            <button class="btn" type="button" onclick={() => run(note.uncheckEverything)}>Uncheck all</button>
+            <button class="btn" type="button" onclick={() => run(note.removeAllChecked)}>Delete checked items</button>
         {/if}
         <button class="btn" type="button" onclick={() => run(exportText)}>Export as text</button>
         {#if confirmDelete}
