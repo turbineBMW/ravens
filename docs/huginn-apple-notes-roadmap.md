@@ -207,6 +207,12 @@ Size is relative engineering complexity: S small, M medium, L large, XL a substa
 
 ### Phase 2 — Real notes and mixed content
 
+**Spike result:** [spikes/editor](../spikes/editor/README.md) chose Tiptap on Yjs and a format 2 that keeps the format 1 `items` map and adds a rich `body` referencing it. It passed on the Fold and the Surface, and the migration rehearsal against the live server's 2 notes found no problems. Accepted limits: checklist items stay plain text, one version wins when two devices edit the same item, and a selection can't run through a checklist.
+
+**First increment, on the `huginn-phase-2` branch:** format 2 with its migration, `NOTE_FORMAT` and `CLIENT_VERSION` 2, and Huginn's `min_client` 2. New notes start as text. The editor has text styles, bold, italic, underline, strikethrough, highlight, monospaced text, links, bulleted and numbered lists with indenting, tables with row and column operations, divider lines, one checklist block per note, undo, and plain text export. The title is the first line unless one is set.
+
+Still to do in this phase: several checklists in a note, collapsible sections with stable IDs, selected-text-to-reminder, and rich/plain paste choices. Until several checklists exist, removing a checklist block keeps its items, so adding a checklist again brings them back, and two offline devices each adding one to the same note show the same list twice. Moving to format 2 cannot be undone by downgrading: rollback means restoring a backup.
+
 **Size L. Dependency: P0 schema/migration contract, P1 shell.** This is the largest early product improvement.
 
 - First deliver the editor spike and migration design. Then ship paragraphs, title/heading/subheading styles, bold/italic/underline/strikethrough, highlights, monospaced text, web links, bullets/numbering, and indentation.

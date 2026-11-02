@@ -1,0 +1,22 @@
+{
+    "name": "huginn-editor-spike",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "esbuild src/main.ts --bundle --minify --format=esm --outfile=dist/main.js --metafile=dist/meta.json && cp src/index.html dist/index.html",
+        "test": "npm run build && node test.mjs"
+    },
+    "dependencies": {
+        "@tiptap/core": "^3.32.2",
+        "@tiptap/extension-collaboration": "^3.32.2",
+        "@tiptap/extension-highlight": "^3.32.2",
+        "@tiptap/extension-table": "^3.32.2",
+        "@tiptap/pm": "^3.32.2",
+        "@tiptap/starter-kit": "^3.32.2",
+        "@tiptap/y-tiptap": "^3.0.12",
+        "esbuild": "^0.28.2",
+        "fractional-indexing": "^4.0.0",
+        "y-protocols": "^1.0.7",
+        "yjs": "^13.6.33"
+    }
+}

@@ -1,6 +1,7 @@
-// Drive the built client in headless Chromium against a throwaway server:
-// save confirmation through a server outage, a second device, an old client
-// being turned away, resizing, narrow widths and navigation.
+// Drive the built client in headless Chromium against a throwaway server: rich
+// text, a format 1 note written by the old code, save confirmation through a
+// server outage, a second device, an old client being turned away, opening a
+// note offline, resizing, narrow widths and navigation.
 //
 //   npm run build -w huginn/web && cargo build -p huginn-server
 //   node scripts/huginn-browser-test.mjs
@@ -114,6 +115,7 @@ async function device() {
     return {
         js,
         errors,
+        type: (text) => call('Input.insertText', { text }),
         go: async (url) => {
             await call('Page.navigate', { url });
             await until(js, `document.querySelector('.headerbar') !== null`);
@@ -153,6 +155,14 @@ const newNote = async (page) => {
         `location.pathname !== ${JSON.stringify(from)} && !!document.querySelector('.headerbar-input')`,
     );
 };
+const focusBody = async (page) => {
+    await until(page.js, `!!document.querySelector('.tiptap')`);
+    await page.js(`document.querySelector('.tiptap').focus()`);
+    await until(page.js, `document.activeElement === document.querySelector('.tiptap')`);
+};
+const tool = (page, label) => page.js(`document.querySelector('.editor-toolbar [aria-label="${label}"]').click()`);
+const bodyHtml = `document.querySelector('.tiptap').innerHTML`;
+const rowTitle = `document.querySelector('.note-row.selected strong')?.textContent`;
 const overflows = (page) => page.js('document.documentElement.scrollWidth > innerWidth');
 
 async function main() {
@@ -183,9 +193,44 @@ async function main() {
 
     // Saved only once the server has it, through an outage.
     await newNote(page);
-    await setTitle(page, 'Groceries');
+    assert.equal(await page.js(`document.querySelectorAll('.note-checklist').length`), 0, 'a new note starts as text');
+    await focusBody(page);
+    await page.type('First line of the note');
     await until(page.js, subtitleIs('Saved'));
+    // The title rule, in the list and the header.
+    await until(page.js, `${rowTitle} === 'First line of the note'`);
+    assert.equal(await page.js(`document.querySelector('.headerbar-input').placeholder`), 'First line of the note');
+    assert.equal(await page.js(noteTitle), '', 'the first line is not stored as a title');
+    await setTitle(page, 'Groceries');
+    await until(page.js, `${rowTitle} === 'Groceries'`);
+    await setTitle(page, '');
+    await until(page.js, `${rowTitle} === 'First line of the note'`);
+    await setTitle(page, 'Groceries');
     const noteUrl = await page.js('location.href');
+    // Formatting from the toolbar, a table, and undo.
+    await page.js(`(() => {
+        const add = [...document.querySelectorAll('.editor-toolbar button')].find((b) => b.textContent === 'Checklist');
+        add.click();
+    })()`);
+    await until(page.js, `document.querySelectorAll('.note-checklist').length === 1`);
+    assert.equal(
+        await page.js(`document.querySelector('.editor-toolbar [aria-label="Add checklist"]').disabled`),
+        true,
+        'one checklist for now',
+    );
+    await page.js(`window.__editorEnd = document.querySelector('.tiptap'); window.__editorEnd.focus()`);
+    await tool(page, 'Add table');
+    await until(page.js, `${bodyHtml}.includes('<table')`);
+    assert.equal(
+        await page.js(`document.querySelectorAll('.note-checklist').length`),
+        1,
+        'the table replaced the checklist',
+    );
+    await sleep(500); // Undo groups edits made close together.
+    await tool(page, 'Add row');
+    await until(page.js, `document.querySelectorAll('.tiptap tr').length === 3`);
+    await tool(page, 'Undo');
+    await until(page.js, `document.querySelectorAll('.tiptap tr').length === 2`);
     await page.js(`(() => {
         const add = document.querySelector('.checklist input[placeholder="Add item"]');
         add.value = 'Milk';
@@ -207,6 +252,36 @@ async function main() {
     await other.go(noteUrl);
     await until(other.js, `${noteTitle} === 'Groceries, edited offline'`);
     await until(other.js, `[...document.querySelectorAll('.checklist .text')].some((i) => i.value === 'Milk')`);
+    await until(other.js, `${bodyHtml}.includes('<table') && ${bodyHtml}.includes('First line of the note')`);
+
+    // A note the old code wrote opens with every item, once, on two devices.
+    const seeded = await new Promise((resolve, reject) => {
+        const seed = spawn(process.execPath, ['scripts/seed-demo.mjs', `ws://127.0.0.1:${API_PORT}/huginn/v1/sync`], {
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        let out = '';
+        seed.stdout.on('data', (chunk) => (out += chunk));
+        seed.on('exit', (code) =>
+            code === 0 ? resolve(out.trim().split('\n').pop()) : reject(Error('seeding failed')),
+        );
+    });
+    for (const reader of [page, other]) {
+        await reader.go(`${BASE}n/${seeded}`);
+        await until(reader.js, `document.querySelectorAll('.note-checklist').length === 1`);
+        await until(reader.js, `document.querySelectorAll('.checklist li[data-item]').length === 7`);
+        assert.equal(await reader.js(noteTitle), 'Groceries');
+    }
+    await until(page.js, subtitleIs('Saved'));
+    await until(other.js, subtitleIs('Saved'));
+    assert.equal(
+        await page.js(`document.querySelectorAll('.note-checklist').length`),
+        1,
+        'one checklist after both migrate',
+    );
+    await page.js(`document.querySelector('.tiptap').focus()`);
+    await page.go(noteUrl);
+    await until(page.js, `${noteTitle} === 'Groceries, edited offline'`);
+    await focusBody(page);
 
     // The open note and its focus survive resizing.
     await page.js(`window.__title = document.querySelector('.headerbar-input'); window.__title.focus()`);
@@ -233,7 +308,7 @@ async function main() {
     for (let i = 0; i < 14; i++) await newNote(page);
     await page.size(390);
     await page.go(BASE);
-    await until(page.js, `document.querySelectorAll('.note-row a').length === 15`);
+    await until(page.js, `document.querySelectorAll('.note-row a').length === 16`);
     assert.equal(await overflows(page), false, 'list overflows at 390');
     await page.size(320);
     await sleep(150);
@@ -257,6 +332,23 @@ async function main() {
     await page.go(noteUrl);
     await until(page.js, `${noteTitle} === 'Groceries, edited offline'`);
 
+    // With the server down, a note still opens, editor and all, from the offline shell.
+    await page.js(`navigator.serviceWorker.ready.then(() => true)`);
+    await page.go(noteUrl);
+    await until(page.js, `navigator.serviceWorker.controller !== null`);
+    await until(page.js, `!!document.querySelector('.tiptap')`);
+    await sleep(500);
+    stopServer();
+    await page.go(noteUrl);
+    await until(page.js, `${noteTitle} === 'Groceries, edited offline'`);
+    await until(page.js, `${bodyHtml}.includes('<table')`);
+    await until(
+        page.js,
+        subtitleIs('Offline') + ` || ${subtitle} === 'Connecting…' || ${subtitle}?.startsWith('Offline')`,
+    );
+    startServer();
+    await sleep(1000);
+
     // An old client says so, and stops trying.
     await new Promise((resolve) => oldClientProxy.listen(OLD_CLIENT_PORT, '127.0.0.1', resolve));
     const old = await device();
@@ -270,7 +362,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: save states through an outage, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

@@ -9,19 +9,27 @@
  * Y.Map of item id to Y.Map { text, checked, checkedAt, pos }. Each item is
  * its own object with a stable id, a completion state and a fractional
  * index `pos`, so reordering, checking and offline editing on two devices
- * merge without clobbering each other. `meta.format` versions that shape;
- * a note without it is format 1.
+ * merge without clobbering each other.
+ *
+ * `meta.format` versions the shape. Format 2 adds `body`, a Y.XmlFragment of
+ * rich text whose `checklist` block shows the `items` map; items themselves are
+ * unchanged from format 1, which has no `format` and no body. `meta.title` holds
+ * only a title the user set: without one, the title is the note's first line.
  */
 import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
 import { base } from '$app/paths';
 import { openDoc, yStore, newId, type OpenDoc } from '@ravens/ui/sync';
-import type { Readable } from 'svelte/store';
+import { readable, type Readable } from 'svelte/store';
 
 export type NoteKind = 'checklist' | 'text';
 
 /** The newest note format this client can safely edit. */
-export const NOTE_FORMAT = 1;
+export const NOTE_FORMAT = 2;
+
+/** Marks the migration, so undo and the index don't treat it as an edit. */
+const MIGRATION = 'huginn-migration';
+const INDEX_DELAY_MS = 300;
 
 export interface NoteMeta {
     id: string;
@@ -49,12 +57,86 @@ export interface Item {
 type YNoteMeta = Y.Map<string | number | boolean>;
 type YItem = Y.Map<string | number | boolean>;
 
+// ---------- the migration ----------
+
+function fnv1a(text: string): number {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return hash >>> 0;
+}
+
+/**
+ * Format 1 to format 2, as a Yjs update. Its author and content depend only on
+ * the note ID, so every device produces the same operations, and applying them
+ * twice, or after they were edited or deleted, changes nothing. Never change
+ * what this writes: devices must keep agreeing on it.
+ */
+export function migrationSeed(noteId: string): Uint8Array {
+    const seed = new Y.Doc();
+    seed.clientID = fnv1a(`huginn-format-2:${noteId}`);
+    seed.transact(() => {
+        seed.getMap('meta').set('format', 2);
+        const checklist = new Y.XmlElement('checklist');
+        checklist.setAttribute('list', 'items');
+        seed.getXmlFragment('body').insert(0, [checklist, new Y.XmlElement('paragraph')]);
+    });
+    const update = Y.encodeStateAsUpdate(seed);
+    seed.destroy();
+    return update;
+}
+
+// ---------- plain text from the body ----------
+
+function inlineText(node: Y.XmlElement | Y.XmlText | Y.XmlHook): string {
+    if (node instanceof Y.XmlText) {
+        return (node.toDelta() as { insert: unknown }[])
+            .map((op) => (typeof op.insert === 'string' ? op.insert : ''))
+            .join('');
+    }
+    if (!(node instanceof Y.XmlElement)) return '';
+    if (node.nodeName === 'hardBreak') return ' ';
+    return (node.toArray() as Y.XmlElement[]).map(inlineText).join('');
+}
+
+/** A block's text lines; `decorate` adds list markers and tabs between table cells. */
+function blockLines(node: Y.XmlElement, decorate: boolean): string[] {
+    const children = () => node.toArray().filter((n): n is Y.XmlElement => n instanceof Y.XmlElement);
+    switch (node.nodeName) {
+        case 'horizontalRule':
+            return decorate ? ['---'] : [];
+        case 'bulletList':
+        case 'orderedList':
+            return children().flatMap((listItem, at) => {
+                const marker = !decorate ? '' : node.nodeName === 'bulletList' ? '- ' : `${at + 1}. `;
+                return (listItem.toArray() as Y.XmlElement[])
+                    .flatMap((part) => blockLines(part, decorate))
+                    .map((line, i) => (i === 0 ? marker : decorate ? '  ' : '') + line);
+            });
+        case 'blockquote':
+            return children().flatMap((part) => blockLines(part, decorate));
+        case 'table':
+            return children().map((row) =>
+                (row.toArray() as Y.XmlElement[])
+                    .map((cell) => (cell.toArray() as Y.XmlElement[]).map(inlineText).join(' '))
+                    .join(decorate ? '\t' : ' '),
+            );
+        case 'codeBlock':
+            return inlineText(node).split('\n');
+        default:
+            return [inlineText(node)];
+    }
+}
+
 // ---------- the index ----------
 
 export interface Index {
     doc: OpenDoc;
     notes: Readable<NoteMeta[]>;
     create(kind: NoteKind): string;
+    kindOf(id: string): NoteKind | undefined;
     touch(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done'>>): void;
     /** Correct the mirrored fields from the note itself, without counting as an edit. */
     repair(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'preview' | 'open' | 'done'>>): void;
@@ -104,6 +186,10 @@ export function openIndex(): Index {
             });
             return id;
         },
+        kindOf(id) {
+            const m = map.get(id);
+            return m ? readMeta(id, m).kind : undefined;
+        },
         touch(id, patch) {
             const m = map.get(id);
             if (!m) return;
@@ -138,12 +224,25 @@ export function openIndex(): Index {
 
 export interface Note {
     doc: OpenDoc;
+    /** The title the user set, if any. */
     title: Readable<string>;
+    /** What the title is when none is set, for the title field's placeholder. */
+    firstLine: Readable<string>;
+    /** Zero until the note has a format this client can show: format 1 is migrated first. */
+    format: Readable<number>;
+    body: Y.XmlFragment;
+    hasChecklist: Readable<boolean>;
     /** Saved by a newer client: shown as unavailable, and every edit below does nothing. */
     tooNew: Readable<boolean>;
     /** Unchecked items by position, then checked items in the order they were checked. */
     items: Readable<Item[]>;
     setTitle(title: string): void;
+    /** Give a brand new note its format and empty body. */
+    initialise(): void;
+    /** Move a format 1 note to this format. `synced`: the server's copy has arrived. */
+    migrate(synced: boolean): void;
+    /** The note as plain text, for export. */
+    plainText(): string;
     /** Insert after `afterId` (or at the end); returns the new id. */
     addItem(text: string, afterId?: string | null): string;
     setText(id: string, text: string): void;
@@ -191,34 +290,105 @@ export function openNote(id: string, index?: Index): Note {
             .filter((i) => !i.checked)
             .map((i) => i.pos);
 
-    const isTooNew = () => Number(meta.get('format') ?? 1) > NOTE_FORMAT;
+    const body = doc.doc.getXmlFragment('body');
+    const isTooNew = () => Number(meta.get('format') ?? 0) > NOTE_FORMAT;
+    const blocks = () => body.toArray().filter((n): n is Y.XmlElement => n instanceof Y.XmlElement);
+    /** A format 1 note has no body, and all of it is its checklist. */
+    const showsChecklist = () => !meta.has('format') || blocks().some((block) => block.nodeName === 'checklist');
 
-    /** What the index card shows of the items. */
+    /** The note's text, line by line, with the open checklist items where the checklist is. */
+    const textLines = () => {
+        const openItems = () =>
+            readAll()
+                .filter((i) => !i.checked)
+                .map((i) => i.text);
+        const lines = meta.has('format')
+            ? blocks().flatMap((block) => (block.nodeName === 'checklist' ? openItems() : blockLines(block, false)))
+            : openItems();
+        return lines.map((line) => line.trim()).filter(Boolean);
+    };
+
+    /** What the index shows of this note. */
     const summary = () => {
-        const all = readAll();
-        const open = all.filter((i) => !i.checked);
+        const explicit = String(meta.get('title') ?? '').trim();
+        const lines = textLines();
+        const all = showsChecklist() ? readAll() : [];
+        const open = all.filter((i) => !i.checked).length;
         return {
-            preview: open
-                .slice(0, 4)
-                .map((i) => i.text)
-                .join('\n'),
-            open: open.length,
-            done: all.length - open.length,
+            // Without a set title, the first line is the title and not also the preview.
+            title: explicit || (lines[0] ?? ''),
+            preview: (explicit ? lines : lines.slice(1)).slice(0, 4).join('\n'),
+            open,
+            done: all.length - open,
         };
     };
 
-    /** Keep the index card in step with the items. */
+    /** Keep the index card in step with the note. */
     const touched = () => index?.touch(id, summary());
+
+    // Typing reaches the index shortly after, not on every keystroke, and only
+    // the device doing the typing writes it.
+    let pendingTouch: ReturnType<typeof setTimeout> | null = null;
+    const flushTouch = () => {
+        if (pendingTouch) clearTimeout(pendingTouch);
+        if (pendingTouch) touched();
+        pendingTouch = null;
+    };
+    const onBody = (_events: unknown, txn: Y.Transaction) => {
+        if (!txn.local || txn.origin === MIGRATION) return;
+        if (pendingTouch) clearTimeout(pendingTouch);
+        pendingTouch = setTimeout(flushTouch, INDEX_DELAY_MS);
+    };
+    body.observeDeep(onBody);
 
     return {
         doc,
         title: yStore(meta, () => String(meta.get('title') ?? '')),
+        firstLine: readable('', (set) => {
+            const update = () => set(textLines()[0] ?? '');
+            update();
+            body.observeDeep(update);
+            items.observeDeep(update);
+            return () => {
+                body.unobserveDeep(update);
+                items.unobserveDeep(update);
+            };
+        }),
+        format: yStore(meta, () => Number(meta.get('format') ?? 0)),
+        body,
+        hasChecklist: yStore(body, () => blocks().some((block) => block.nodeName === 'checklist')),
         tooNew: yStore(meta, isTooNew),
+        initialise() {
+            doc.doc.transact(() => {
+                meta.set('format', NOTE_FORMAT);
+                meta.set('title', '');
+                body.insert(0, [new Y.XmlElement('paragraph')]);
+            }, MIGRATION);
+        },
+        migrate(synced) {
+            if (meta.has('format')) return;
+            // An empty document may just not be downloaded. Once the server's copy
+            // has arrived, an empty checklist note really is empty; a new note,
+            // whose creator hasn't uploaded it yet, is never treated as format 1.
+            const hasContent = meta.has('title') || items.size > 0;
+            if (hasContent || (synced && index?.kindOf(id) === 'checklist')) {
+                Y.applyUpdate(doc.doc, migrationSeed(id), MIGRATION);
+            }
+        },
+        plainText() {
+            const explicit = String(meta.get('title') ?? '').trim();
+            const lines = blocks().flatMap((block) =>
+                block.nodeName === 'checklist'
+                    ? readAll().map((i) => `[${i.checked ? 'x' : ' '}] ${i.text}`)
+                    : blockLines(block, true),
+            );
+            return [...(explicit ? [explicit, ''] : []), ...lines].join('\n').trim() + '\n';
+        },
         items: yStore(items, readAll),
         setTitle(title) {
             if (isTooNew()) return;
             meta.set('title', title);
-            index?.touch(id, { title });
+            touched();
         },
         addItem(text, afterId = null) {
             if (isTooNew()) return '';
@@ -296,12 +466,13 @@ export function openNote(id: string, index?: Index): Note {
         },
         repairIndex() {
             // An empty document may just not be downloaded: it proves nothing.
-            if (!index || isTooNew() || (!meta.has('title') && items.size === 0)) return;
-            index.repair(id, {
-                ...summary(),
-                ...(meta.has('title') ? { title: String(meta.get('title')) } : {}),
-            });
+            if (!index || isTooNew() || (!meta.has('format') && !meta.has('title') && items.size === 0)) return;
+            index.repair(id, summary());
         },
-        release: () => doc.release(),
+        release() {
+            flushTouch();
+            body.unobserveDeep(onBody);
+            doc.release();
+        },
     };
 }

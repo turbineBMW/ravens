@@ -20,7 +20,7 @@
     const deleted = $derived($notes.filter((n) => n.deletedAt));
     const visible = $derived(
         (trash ? deleted : active).filter((n) =>
-            (n.title || 'Untitled list').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+            (n.title || 'New note').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
         ),
     );
 
@@ -51,9 +51,9 @@
 
     async function create() {
         query = '';
-        const id = index.create('checklist');
+        const id = index.create('text');
         const note = openNote(id, index);
-        note.setTitle('');
+        note.initialise();
         note.release();
         await goto(`${base}/n/${id}`);
     }
@@ -91,7 +91,7 @@
 <header class="headerbar">
     <div class="headerbar-start">
         {#if !trash}
-            <button class="icon-btn" type="button" onclick={create} disabled={!ready} aria-label="New checklist">
+            <button class="icon-btn" type="button" onclick={create} disabled={!ready} aria-label="New note">
                 <Icon name="add" />
             </button>
         {/if}
@@ -136,11 +136,15 @@
                         href="{base}/n/{n.id}{trash ? '?view=trash' : ''}"
                         aria-current={page.params.id === n.id ? 'page' : undefined}
                     >
-                        <strong>{n.title || 'Untitled list'}</strong>
+                        <strong>{n.title || 'New note'}</strong>
                         <span class="small muted"
-                            >{n.pinned && !trash ? 'Pinned · ' : ''}{when(trash ? n.deletedAt : n.updated)} · {n.open} open</span
+                            >{n.pinned && !trash ? 'Pinned · ' : ''}{when(trash ? n.deletedAt : n.updated)}{n.open
+                                ? ` · ${n.open} open`
+                                : ''}</span
                         >
-                        <span class="note-excerpt muted">{n.preview.split('\n').join(' · ') || 'No items yet'}</span>
+                        <span class="note-excerpt muted"
+                            >{n.preview.split('\n').join(' · ') || 'No additional text'}</span
+                        >
                     </a>
                     {#if !trash}
                         <button
@@ -155,8 +159,7 @@
             {:else}
                 <div class="library-empty">
                     <p>{query ? 'No matching titles' : trash ? 'No deleted notes' : 'No notes on this device yet'}</p>
-                    {#if !trash && !query}<button class="btn primary" type="button" onclick={create}
-                            >New checklist</button
+                    {#if !trash && !query}<button class="btn primary" type="button" onclick={create}>New note</button
                         >{/if}
                     {#if !$synced}<p class="small muted">Connect to load notes from your other devices.</p>{/if}
                 </div>

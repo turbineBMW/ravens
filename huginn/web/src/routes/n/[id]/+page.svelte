@@ -48,7 +48,7 @@
             <p role="status">Loading your library…</p>
         {:else if entry?.deletedAt}
             <div class="workspace-empty">
-                <h2>{entry.title || 'Untitled list'}</h2>
+                <h2>{entry.title || 'Untitled note'}</h2>
                 <p class="muted">This note is in Recently Deleted.</p>
                 <button
                     class="btn primary"

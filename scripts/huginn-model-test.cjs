@@ -29,7 +29,7 @@ new Function('require', 'exports', compiled)((name) => {
     if (name === '@ravens/ui/sync') return sync;
     return require(name);
 }, model.exports);
-const { NOTE_FORMAT, openIndex, openNote, sortItems } = model.exports;
+const { NOTE_FORMAT, migrationSeed, openIndex, openNote, sortItems } = model.exports;
 const index = openIndex();
 const id = index.create('checklist');
 const note = openNote(id, index);
@@ -102,7 +102,7 @@ const open = (id) => {
 };
 const entry = (id) => get(fixtureIndex.notes).find((n) => n.id === id);
 const groceries = open(GROCERIES);
-assert.equal(NOTE_FORMAT, 1);
+assert.equal(NOTE_FORMAT, 2);
 assert.equal(get(groceries.tooNew), false, 'a note without a format is format 1');
 assert.equal(get(groceries.title), 'Groceries');
 assert.deepEqual(
@@ -151,10 +151,119 @@ for (const device of [deviceA, deviceB]) {
     assert.equal(device.getMap('items').size, 6);
 }
 
+// ---- format 2 ----
+// These exact bytes are what every device must keep producing, forever.
+assert.equal(
+    Buffer.from(migrationSeed(GROCERIES)).toString('hex'),
+    '0104d4bb800c002801046d65746106666f726d6174017d02070104626f64790309636865636b6c6973742800d4bb800c01046c6973740177056974656d7387d4bb800c01030970617261677261706800',
+    'the migration seed must never change',
+);
+const migratedFormatOne = () => {
+    const d = openNote(GROCERIES, fixtureIndex);
+    return d;
+};
+const itemsBefore = JSON.stringify(groceries.doc.doc.getMap('items').toJSON());
+groceries.migrate(false);
+const seededOnce = stateOf(groceries.doc.doc);
+assert.equal(get(groceries.format), 2);
+assert.equal(JSON.stringify(groceries.doc.doc.getMap('items').toJSON()), itemsBefore, 'migration leaves items alone');
+assert.equal(get(groceries.title), 'Groceries', 'an existing title stays explicit');
+assert.deepEqual(
+    groceries.body.toArray().map((n) => n.nodeName),
+    ['checklist', 'paragraph'],
+);
+assert.equal(get(groceries.hasChecklist), true);
+groceries.migrate(true);
+assert.equal(stateOf(groceries.doc.doc), seededOnce, 'migrating twice writes nothing');
+assert.equal(migratedFormatOne().doc.doc, groceries.doc.doc);
+// Two offline devices migrate on their own and agree.
+const offlineA = new Y.Doc();
+const offlineB = new Y.Doc();
+for (const device of [offlineA, offlineB]) {
+    load(device, fixture.notes[GROCERIES]);
+    Y.applyUpdate(device, migrationSeed(GROCERIES));
+}
+Y.applyUpdate(offlineA, Y.encodeStateAsUpdate(offlineB));
+assert.deepEqual(
+    offlineA
+        .getXmlFragment('body')
+        .toArray()
+        .map((n) => n.nodeName),
+    ['checklist', 'paragraph'],
+    'two migrations make one checklist',
+);
+offlineA.destroy();
+offlineB.destroy();
+
+// A note with nothing on this device isn't migrated until the server's copy proves it empty.
+const emptyIndex = fixtureIndex.create('checklist');
+const emptyNote = openNote(emptyIndex, fixtureIndex);
+emptyNote.migrate(false);
+assert.equal(get(emptyNote.format), 0, 'not downloaded yet');
+emptyNote.migrate(true);
+assert.equal(get(emptyNote.format), 2, 'a synced empty checklist note migrates');
+// A new note whose creator hasn't uploaded it is never mistaken for format 1.
+const pendingNew = fixtureIndex.create('text');
+const pendingNote = openNote(pendingNew, fixtureIndex);
+pendingNote.migrate(true);
+assert.equal(get(pendingNote.format), 0);
+assert.equal(pendingNote.body.length, 0);
+
+// A new note, and the title rule: the first line, unless a title is set.
+const freshId = fixtureIndex.create('text');
+const fresh = openNote(freshId, fixtureIndex);
+fresh.initialise();
+assert.equal(get(fresh.format), 2);
+assert.equal(get(fresh.hasChecklist), false);
+const writeLines = (lines) => {
+    const blocks = lines.map((text) => {
+        const paragraph = new Y.XmlElement('paragraph');
+        paragraph.insert(0, [new Y.XmlText(text)]);
+        return paragraph;
+    });
+    fresh.doc.doc.transact(() => fresh.body.insert(fresh.body.length, blocks));
+};
+writeLines(['First line', 'Second line']);
+fresh.repairIndex();
+assert.equal(entry(freshId).title, 'First line');
+assert.equal(entry(freshId).preview, 'Second line', 'the title is not repeated in the preview');
+assert.equal(get(fresh.firstLine), 'First line');
+assert.equal(get(fresh.title), '', 'the first line is not stored as a title');
+fresh.setTitle('Set title');
+assert.equal(entry(freshId).title, 'Set title');
+assert.equal(entry(freshId).preview, 'First line\nSecond line');
+fresh.setTitle('');
+assert.equal(entry(freshId).title, 'First line', 'clearing the title returns to the first line');
+assert.equal(entry(freshId).open, 0, 'a note without a checklist counts no items');
+// Typing reaches the index when the note lets go, at the latest.
+writeLines(['Third line']);
+fresh.release();
+assert.equal(entry(freshId).preview, 'Second line\nThird line');
+
+// Plain text keeps structure.
+groceries.setTitle('Groceries');
+const bold = new Y.XmlText();
+bold.insert(0, 'Plain ');
+bold.insert(6, 'bold', { bold: {} });
+const prose = new Y.XmlElement('paragraph');
+prose.insert(0, [bold]);
+const listItem = new Y.XmlElement('listItem');
+const inList = new Y.XmlElement('paragraph');
+inList.insert(0, [new Y.XmlText('In a list')]);
+listItem.insert(0, [inList]);
+const list = new Y.XmlElement('bulletList');
+list.insert(0, [listItem]);
+groceries.doc.doc.transact(() => groceries.body.insert(groceries.body.length, [prose, list]));
+const exported = groceries.plainText();
+for (const line of ['Groceries', '[ ] Milk', '[x] Coffee', 'Plain bold', '- In a list']) {
+    assert.ok(exported.split('\n').includes(line), `export lacks "${line}": ${exported}`);
+}
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
 newer.doc.doc.getMap('meta').set('format', NOTE_FORMAT + 1);
+newer.migrate(true);
 assert.equal(get(newer.tooNew), true);
 const frozenNote = stateOf(newer.doc.doc);
 const frozenIndex = stateOf(fixtureIndex.doc.doc);
@@ -170,7 +279,7 @@ newer.repairIndex();
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();
