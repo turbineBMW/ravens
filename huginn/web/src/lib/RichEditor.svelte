@@ -16,6 +16,8 @@
     import { mount, onMount, unmount } from 'svelte';
     import * as Y from 'yjs';
     import ChecklistBlock from '$lib/ChecklistBlock.svelte';
+    import { remindMeHref } from '$lib/links';
+    import { Sections, revealSection, sectionAt } from '$lib/sections';
     import type { Note } from '$lib/notes';
 
     let { note, id }: { note: Note; id: string } = $props();
@@ -38,6 +40,29 @@
     };
     const chain = () => editor!.chain().focus();
     const inTable = $derived(active('table'));
+
+    /** "Remind me" about the selected text, linking back to the section it's in. */
+    const reminderHref = $derived.by(() => {
+        void revision;
+        if (!editor || editor.state.selection.empty) return null;
+        const { from, to } = editor.state.selection;
+        const text = editor.state.doc.textBetween(from, to, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+        if (!text) return null;
+        const section = sectionAt(editor.state, from);
+        return remindMeHref(id, text, section ? `section-${section}` : undefined);
+    });
+
+    let pasteProblem = $state('');
+    async function pastePlain() {
+        pasteProblem = '';
+        try {
+            const text = await navigator.clipboard.readText();
+            editor?.view.pasteText(text);
+            editor?.commands.focus();
+        } catch {
+            pasteProblem = "Couldn't read the clipboard. Paste with Ctrl+Shift+V, or allow clipboard access.";
+        }
+    }
 
     /** Step off a selected checklist, so what's inserted next goes after it, not over it. */
     function pastChecklist({ tr, dispatch }: CommandProps) {
@@ -118,11 +143,15 @@
                 TableKit.configure({ table: { resizable: false } }),
                 Placeholder.configure({ placeholder: 'Start writing' }),
                 Checklist,
+                Sections.configure({ noteId: id }),
                 Collaboration.configure({ fragment: note.body, yUndoOptions: { undoManager: undo } }),
             ],
             onTransaction: () => revision++,
         });
         editor = created;
+        // A link from a reminder may name a section.
+        const target = decodeURIComponent(location.hash.slice(1));
+        if (target.startsWith('section-')) revealSection(created.view, target.slice('section-'.length));
         // Only a blank note takes focus: opening an existing one must not raise a phone's keyboard.
         if (created.isEmpty && !created.state.doc.firstChild?.type.name.startsWith('checklist')) {
             created.commands.focus('start');
@@ -166,6 +195,12 @@
     {@render tool('Strikethrough', 'S', () => chain().toggleStrike().run(), active('strike'))}
     {@render tool('Highlight', 'Mark', () => chain().toggleHighlight().run(), active('highlight'))}
     {@render tool('Link', 'Link', toggleLinkField, active('link'))}
+    {#if reminderHref}
+        <a class="tool-link" href={reminderHref} title="Remind me about the selected text">Remind me</a>
+    {:else}
+        <span class="tool-link" aria-disabled="true" title="Select text to make a reminder">Remind me</span>
+    {/if}
+    {@render tool('Paste as plain text', 'Paste text', () => void pastePlain())}
     <span class="sep"></span>
     {@render tool('Bulleted list', '• List', () => chain().toggleBulletList().run(), active('bulletList'))}
     {@render tool('Numbered list', '1. List', () => chain().toggleOrderedList().run(), active('orderedList'))}
@@ -207,6 +242,9 @@
     {@render tool('Undo', 'Undo', () => chain().undo().run(), undefined, !can((e) => e.can().undo()))}
     {@render tool('Redo', 'Redo', () => chain().redo().run(), undefined, !can((e) => e.can().redo()))}
 </div>
+{#if pasteProblem}
+    <p class="small muted" role="alert">{pasteProblem}</p>
+{/if}
 {#if linkOpen}
     <form class="link-field" onsubmit={applyLink}>
         <input
