@@ -36,6 +36,8 @@ Deliberately deferred: purge tombstones, which matter once notes can be permanen
 
 To back up a server database, run `python3 scripts/backup-db.py SOURCE.db NEW-BACKUP.db` where the database is accessible. The utility includes committed WAL data and verifies SQLite integrity. To rehearse recovery, point a separate server instance at a copy of the backup using `RAVEN_DB_PATH`, a different `RAVEN_LISTEN_ADDR`, and the matching `RAVEN_DEV_USER`; do not replace a running production database. A database backup does not include browser edits that have not reached the server.
 
+**Alpha (from November 2, 2026):** there is no real data yet, so new work skips migrations, backups and version gates; see [Releases](../deploy/phase-releases.md). The safety work recorded above stays in place for when real data arrives.
+
 Huginn should become a general notes app with fast capture, mixed content, reliable offline editing, and a layout that follows the available space. Keep the existing shopping-list experience as a useful part of that app. The first major milestone is a dependable everyday Notes replacement; advanced handwriting, collaboration, and intelligence extend it afterward.
 
 The target devices remain the Surface Pro 11 on Omarchy and the Galaxy Z Fold, with the Mac mini hosting the service. Apple Notes is the functional reference, while Huginn keeps its own theme, self-hosting, and Muninn integration.
