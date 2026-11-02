@@ -27,7 +27,7 @@ export type SaveState = 'unknown' | 'saved' | 'pending' | 'failed';
  * app's `min_client`, so raise both when a change would let an older client
  * damage documents.
  */
-export const CLIENT_VERSION = 1;
+export const CLIENT_VERSION = 2;
 // The server's custom messages and close code (raven-server's sync.rs).
 const MSG_SAVED = 100;
 const MSG_SAVE_FAILED = 101;

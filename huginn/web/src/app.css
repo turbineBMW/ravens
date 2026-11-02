@@ -111,7 +111,7 @@
 
 /* ---- one list ---- */
 .note {
-    max-width: 640px;
+    max-width: 720px;
     margin: 0 auto;
 }
 .menu .sheet.actions {
@@ -303,6 +303,163 @@
 }
 .divider-btn .chev.open {
     transform: rotate(90deg);
+}
+
+/* ---- the rich editor ---- */
+.editor-toolbar {
+    position: sticky;
+    top: calc(48px + env(safe-area-inset-top));
+    z-index: 4;
+    display: flex;
+    gap: 2px;
+    align-items: center;
+    margin: 0 -8px 8px;
+    padding: 2px 8px;
+    overflow-x: auto;
+    background: var(--bg);
+    scrollbar-width: none;
+}
+.editor-toolbar select,
+.editor-toolbar button {
+    flex: 0 0 auto;
+    min-width: var(--tap);
+    min-height: var(--tap);
+    padding: 0 8px;
+    border: none;
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+}
+.editor-toolbar button:hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.editor-toolbar button[aria-pressed='true'] {
+    background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+.editor-toolbar button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+.editor-toolbar [aria-label='Bold'] {
+    font-weight: 700;
+}
+.editor-toolbar [aria-label='Italic'] {
+    font-style: italic;
+}
+.editor-toolbar [aria-label='Underline'] {
+    text-decoration: underline;
+}
+.editor-toolbar [aria-label='Strikethrough'] {
+    text-decoration: line-through;
+}
+@media (min-width: 760px) {
+    .editor-toolbar {
+        flex-wrap: wrap;
+        overflow-x: visible;
+    }
+}
+.editor-toolbar .sep {
+    flex: 0 0 1px;
+    align-self: stretch;
+    margin: 8px 4px;
+    background: var(--line);
+}
+.link-field {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+.link-field input {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--tap);
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.tiptap {
+    min-height: 40vh;
+    outline: none;
+    overflow-wrap: anywhere;
+}
+.tiptap p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    color: var(--muted);
+    pointer-events: none;
+}
+.tiptap h1,
+.tiptap h2,
+.tiptap h3 {
+    margin: 1em 0 0.4em;
+    line-height: 1.25;
+}
+.tiptap h1 {
+    font-size: 1.6rem;
+}
+.tiptap h2 {
+    font-size: 1.3rem;
+}
+.tiptap h3 {
+    font-size: 1.1rem;
+}
+.tiptap p {
+    margin: 0.5em 0;
+}
+.tiptap mark {
+    padding: 0 2px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+    color: inherit;
+}
+.tiptap code,
+.tiptap pre {
+    font-family: var(--mono);
+    font-size: 0.9em;
+}
+.tiptap pre {
+    padding: 8px 12px;
+    overflow-x: auto;
+    border-radius: var(--radius);
+    background: var(--panel-2);
+}
+.tiptap blockquote {
+    margin: 0.5em 0;
+    padding-left: 12px;
+    border-left: 3px solid var(--line);
+}
+.tiptap hr {
+    margin: 1em 0;
+    border: none;
+    border-top: 1px solid var(--line);
+}
+.tiptap table {
+    width: 100%;
+    margin: 0.5em 0;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.tiptap td,
+.tiptap th {
+    min-width: 4em;
+    padding: 4px 8px;
+    border: 1px solid var(--line);
+    vertical-align: top;
+}
+.tiptap .selectedCell {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.tiptap .tableWrapper {
+    overflow-x: auto;
+}
+.tiptap .ProseMirror-selectednode > .checklist {
+    outline: 2px solid var(--accent);
+}
+.note-checklist {
+    margin: 0.5em 0;
 }
 
 /* One persistent workspace. CSS changes visibility without replacing the editor. */

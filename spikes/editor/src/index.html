@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="color-scheme" content="light dark" />
+        <title>Huginn editor spike</title>
+        <style>
+            :root {
+                --bg: #f6f3ed;
+                --panel: #ffffff;
+                --text: #1f1d24;
+                --muted: #5f568f;
+                --line: #dcd7cd;
+                --ok: #1f7a3c;
+                --bad: #c4303f;
+            }
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --bg: #1c1d24;
+                    --panel: #282a36;
+                    --text: #f8f8f2;
+                    --muted: #a9a6c9;
+                    --line: #44475a;
+                    --ok: #5ccf86;
+                    --bad: #ef6b5e;
+                }
+            }
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                padding: 12px;
+                background: var(--bg);
+                color: var(--text);
+                font:
+                    16px/1.45 system-ui,
+                    sans-serif;
+            }
+            h1 {
+                font-size: 1.1rem;
+                margin: 0 0 4px;
+            }
+            p.note {
+                margin: 0 0 12px;
+                color: var(--muted);
+                font-size: 0.9rem;
+            }
+            button {
+                min-height: 44px;
+                min-width: 44px;
+                padding: 0 12px;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+                background: var(--panel);
+                color: inherit;
+                font: inherit;
+            }
+            .bar {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin-bottom: 12px;
+            }
+            .devices {
+                display: grid;
+                gap: 12px;
+                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            }
+            .device {
+                min-width: 0;
+                padding: 10px;
+                background: var(--panel);
+                border: 1px solid var(--line);
+                border-radius: 10px;
+            }
+            .device h2 {
+                font-size: 0.9rem;
+                margin: 0 0 8px;
+                color: var(--muted);
+            }
+            .tiptap {
+                min-height: 240px;
+                outline: none;
+                overflow-wrap: anywhere;
+            }
+            .tiptap table {
+                border-collapse: collapse;
+                width: 100%;
+            }
+            .tiptap td,
+            .tiptap th {
+                border: 1px solid var(--line);
+                padding: 4px 8px;
+            }
+            .checklist {
+                list-style: none;
+                margin: 8px 0;
+                padding: 0;
+                border: 1px solid var(--line);
+                border-radius: 8px;
+            }
+            .checklist li {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                min-height: 44px;
+                padding: 0 8px;
+            }
+            .checklist input[type='checkbox'] {
+                width: 22px;
+                height: 22px;
+            }
+            .checklist .text {
+                flex: 1;
+                min-width: 0;
+                border: 0;
+                background: transparent;
+                color: inherit;
+                font: inherit;
+            }
+            .checklist .done .text {
+                text-decoration: line-through;
+                color: var(--muted);
+            }
+            #results {
+                margin: 12px 0;
+                padding: 0;
+                list-style: none;
+                font-size: 0.9rem;
+            }
+            #results .pass::before {
+                content: 'PASS  ';
+                color: var(--ok);
+                font-weight: 700;
+            }
+            #results .fail::before {
+                content: 'FAIL  ';
+                color: var(--bad);
+                font-weight: 700;
+            }
+            #sandbox {
+                position: absolute;
+                left: -9999px;
+                width: 400px;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Huginn editor spike</h1>
+        <p class="note">
+            Two devices on one page, migrated from a format 1 note. No real data and no server. Go offline, edit both,
+            come back online.
+        </p>
+        <div class="bar">
+            <button id="online" type="button" aria-pressed="true">Online</button>
+            <button data-cmd="toggleBold" type="button">Bold</button>
+            <button data-cmd="toggleItalic" type="button">Italic</button>
+            <button data-cmd="toggleHighlight" type="button">Highlight</button>
+            <button data-cmd="heading" type="button">Heading</button>
+            <button data-cmd="toggleBulletList" type="button">List</button>
+            <button data-cmd="table" type="button">Table</button>
+            <button data-cmd="undo" type="button">Undo</button>
+            <button data-cmd="redo" type="button">Redo</button>
+            <button id="run" type="button">Run checks</button>
+        </div>
+        <ul id="results" aria-live="polite"></ul>
+        <div class="devices">
+            <section class="device">
+                <h2>Device A</h2>
+                <div id="a"></div>
+            </section>
+            <section class="device">
+                <h2>Device B</h2>
+                <div id="b"></div>
+            </section>
+        </div>
+        <div id="sandbox" aria-hidden="true"></div>
+        <script type="module" src="main.js"></script>
+    </body>
+</html>

@@ -18,6 +18,8 @@
     const save = note.doc.save;
     const outdated = note.doc.outdated;
     const tooNew = note.tooNew;
+    const format = note.format;
+    const firstLine = note.firstLine;
     const title = note.title;
     const items = note.items;
     let local = $state(false);
@@ -29,7 +31,10 @@
     const available = $derived(
         local && (received || !!$title || $items.length > 0 || note.doc.doc.getMap('meta').has('title')),
     );
-    const editable = $derived(available && !$tooNew);
+    const editable = $derived(available && $format > 0 && !$tooNew);
+    $effect(() => {
+        if (local) note.migrate($synced);
+    });
     // Once the server's copy has arrived, the note can correct its index entry.
     let repaired = false;
     $effect(() => {
@@ -74,7 +79,7 @@
         <input
             class="headerbar-input"
             type="text"
-            placeholder="Title"
+            placeholder={$firstLine || 'Title'}
             aria-label="Note title"
             value={$title}
             autocomplete="off"
@@ -88,9 +93,9 @@
 <div class="editor-body">
     {#if editable}
         {@render children(note)}
-    {:else if available}
+    {:else if available && $tooNew}
         <div class="workspace-empty">
-            <h2>{$title || 'Untitled list'}</h2>
+            <h2>{$title || 'Untitled note'}</h2>
             <p class="muted">A newer version of Huginn saved this note. Close and reopen the app to update it.</p>
         </div>
     {:else if local}

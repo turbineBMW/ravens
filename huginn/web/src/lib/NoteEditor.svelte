@@ -1,14 +1,12 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import Checklist from '$lib/Checklist.svelte';
     import { remindersFor, reminderHref, type Reminder } from '$lib/links';
     import type { Note } from '$lib/notes';
 
     let { note, id }: { note: Note; id: string } = $props();
 
-    // Top-level store declarations, re-derived when the note changes.
-    const title = $derived(note.title);
-    const items = $derived(note.items);
+    // The editor is its own chunk; the service worker keeps it for offline use.
+    const editor = import('$lib/RichEditor.svelte');
 
     // Reminders Muninn holds for this note (best effort: Muninn may be down).
     let reminders = $state<Reminder[]>([]);
@@ -38,5 +36,11 @@
             {/each}
         </p>
     {/if}
-    <Checklist items={$items} {note} noteId={id} noteTitle={$title} />
+    {#await editor}
+        <p class="muted" role="status">Opening the editor…</p>
+    {:then { default: RichEditor }}
+        <RichEditor {note} {id} />
+    {:catch}
+        <p role="alert">Could not load the editor. Reconnect and reopen Huginn.</p>
+    {/await}
 </article>
