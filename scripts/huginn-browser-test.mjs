@@ -291,6 +291,40 @@ async function main() {
     await until(page.js, firstRow('Second B'));
     assert.deepEqual(await listTexts(1), ['Second B', 'Second A'], 'drag reorders within the list');
     assert.deepEqual(await listTexts(0), ['Milk'], 'dragging leaves the other list alone');
+
+    // Sections: headings get IDs, collapse on this device only, and selected text
+    // makes a reminder linking back to its section.
+    await page.js(`document.querySelector('.tiptap').focus()`);
+    await page.js(`(() => {
+        const ed = document.querySelector('.tiptap').editor;
+        ed.chain().focus('end').insertContent('<h2>Plans</h2><p>Under plans</p><h2>Later</h2><p>Under later</p>').run();
+    })()`);
+    await until(page.js, `document.querySelectorAll('.tiptap h2[data-section]').length === 2`);
+    const sectionIds = await page.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`);
+    assert.notEqual(sectionIds[0], sectionIds[1]);
+    await page.js(`document.querySelector('.tiptap h2 .section-toggle').click()`);
+    await until(
+        page.js,
+        `[...document.querySelectorAll('.tiptap p')].find((p) => p.textContent === 'Under plans')?.classList.contains('section-hidden')`,
+    );
+    assert.equal(
+        await page.js(
+            `[...document.querySelectorAll('.tiptap p')].find((p) => p.textContent === 'Under later').classList.contains('section-hidden')`,
+        ),
+        false,
+        'collapsing one section hides only it',
+    );
+    await page.js(`(() => {
+        const ed = document.querySelector('.tiptap').editor;
+        let at = 0;
+        ed.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'Under later') at = pos; });
+        ed.chain().focus().setTextSelection({ from: at, to: at + 5 }).run();
+    })()`);
+    await until(page.js, `!!document.querySelector('.editor-toolbar a.tool-link')`);
+    const remindHref = await page.js(`document.querySelector('.editor-toolbar a.tool-link').getAttribute('href')`);
+    const remindParams = new URL(remindHref, BASE).searchParams;
+    assert.equal(remindParams.get('title'), 'Under');
+    assert.equal(JSON.parse(remindParams.get('source')).fragment, `section-${sectionIds[1]}`);
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -307,6 +341,22 @@ async function main() {
     await until(other.js, `[...document.querySelectorAll('.checklist .text')].some((i) => i.value === 'Milk')`);
     await until(other.js, `${bodyHtml}.includes('<table') && ${bodyHtml}.includes('First line of the note')`);
     await until(other.js, `document.querySelectorAll('.note-checklist').length === 2`);
+    await until(other.js, `document.querySelectorAll('.tiptap h2[data-section]').length === 2`);
+    assert.deepEqual(
+        await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
+        sectionIds,
+        'section IDs sync',
+    );
+    assert.equal(
+        await other.js(`document.querySelectorAll('.tiptap .section-hidden').length`),
+        0,
+        'collapsing is per device',
+    );
+    // A reminder's link opens the note at its section, expanded.
+    await page.go(BASE); // A fresh load, not a jump within the page.
+    await page.go(`${noteUrl}#section-${sectionIds[0]}`);
+    await until(page.js, `!!document.querySelector('.tiptap h2[data-section]')`);
+    await until(page.js, `document.querySelectorAll('.tiptap .section-hidden').length === 0`);
     await until(
         other.js,
         `document.querySelectorAll('.note-checklist')[1].querySelector('li[data-item] .text')?.value === 'Second B'`,
@@ -420,7 +470,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

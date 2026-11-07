@@ -359,6 +359,48 @@
         overflow-x: visible;
     }
 }
+.editor-toolbar .tool-link {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--tap);
+    padding: 0 8px;
+    border-radius: var(--radius);
+    color: var(--text);
+    text-decoration: none;
+}
+.editor-toolbar a.tool-link:hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.editor-toolbar span.tool-link {
+    opacity: 0.4;
+}
+.tiptap .section-hidden {
+    display: none;
+}
+.tiptap .section-toggle {
+    width: 1.4em;
+    margin: 0 0.2em 0 -1.6em;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.8em;
+    cursor: pointer;
+    vertical-align: middle;
+}
+.tiptap h1,
+.tiptap h2,
+.tiptap h3 {
+    padding-left: 1.6em;
+}
+@media (min-width: 760px) {
+    .tiptap h1,
+    .tiptap h2,
+    .tiptap h3 {
+        padding-left: 0;
+    }
+}
 .editor-toolbar .sep {
     flex: 0 0 1px;
     align-self: stretch;
