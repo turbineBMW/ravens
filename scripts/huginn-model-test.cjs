@@ -31,6 +31,48 @@ new Function('require', 'exports', compiled)((name) => {
 }, model.exports);
 const { NOTE_FORMAT, INK_STRIDE, decodePoints, encodePoints, migrationSeed, openIndex, openNote, sortItems } =
     model.exports;
+const geometry = { exports: {} };
+new Function(
+    'require',
+    'exports',
+    ts.transpileModule(fs.readFileSync('huginn/web/src/lib/ink.ts', 'utf8'), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+)((name) => (name === '$lib/notes' ? model.exports : require(name)), geometry.exports);
+{
+    const { ERASER_RADIUS, eraseFrom, resample, touches } = geometry.exports;
+    // A straight pen stroke from x 0 to 300 at y 100, with only its two ends sampled.
+    const line = { points: Float32Array.from([0, 100, 0.25, 0, 300, 100, 1, 30]), width: 4 };
+    const dense = resample(line.points, 10);
+    assert.equal(dense.length / INK_STRIDE, 31, 'resampling fills the gap in even steps');
+    assert.deepEqual(dense.slice(0, 4), [0, 100, 0.25, 0]);
+    assert.deepEqual(dense.slice(-4), [300, 100, 1, 30]);
+    assert.ok(Math.abs(dense[15 * INK_STRIDE + 2] - 0.625) < 1e-6, 'pressure is interpolated');
+    assert.equal(eraseFrom(line, [150, 160]), null, 'an eraser that misses leaves the stroke alone');
+    // Through the middle, between the two samples: the stroke splits in two.
+    const halves = eraseFrom(line, [150, 100]);
+    assert.equal(halves.length, 2);
+    const reach = ERASER_RADIUS + line.width / 2;
+    const lastX = (p) => p[p.length - INK_STRIDE];
+    assert.ok(lastX(halves[0]) < 150 - reach + 5 && lastX(halves[0]) >= 150 - reach - 5, 'cut close to the eraser');
+    assert.ok(halves[1][0] > 150 + reach - 5 && halves[1][0] <= 150 + reach + 5);
+    assert.equal(halves[0][0], 0);
+    assert.equal(lastX(halves[1]), 300, 'the ends are untouched');
+    for (const half of halves) {
+        for (let i = 0; i < half.length; i += INK_STRIDE) {
+            assert.ok(
+                !touches({ points: half.slice(i, i + INK_STRIDE), width: 4 }, 150, 100),
+                'nothing left under the eraser',
+            );
+        }
+    }
+    // Over one end: one piece. Across the whole stroke: nothing, not crumbs.
+    assert.equal(eraseFrom(line, [0, 100]).length, 1);
+    const sweep = [];
+    for (let x = 0; x <= 300; x += 5) sweep.push(x, 100);
+    assert.deepEqual(eraseFrom(line, sweep), []);
+}
+
 const index = openIndex();
 const id = index.create('checklist');
 const note = openNote(id, index);
@@ -356,12 +398,12 @@ assert.equal(encodePoints(points).byteLength, points.length * 4);
 assert.equal(INK_STRIDE, 4);
 const drawing = sketch.ink(strokesName);
 assert.equal(sketch.ink(strokesName), drawing, 'one model per drawing');
-const first = drawing.add({ color: 'blue', width: 4, points });
+const first = drawing.add({ tool: 'pen', color: 'blue', width: 4, points });
 assert.ok(first);
 const otherDevice = new Y.Doc();
 Y.applyUpdate(otherDevice, Y.encodeStateAsUpdate(sketch.doc.doc));
 // Offline on both: this device draws again, the other erases the first stroke and draws its own.
-const second = drawing.add({ color: 'ink', width: 4, points: Float32Array.from([1, 2, 0.3, 0]) });
+const second = drawing.add({ tool: 'pen', color: 'ink', width: 4, points: Float32Array.from([1, 2, 0.3, 0]) });
 otherDevice.transact(() => {
     const strokes = otherDevice.getMap(strokesName);
     strokes.delete(first);
@@ -389,6 +431,45 @@ assert.deepEqual(
     get(drawing.strokes).map((s) => s.id),
     ['remotestroke0000000a'],
 );
+// A highlighter keeps its tool; an unknown tool or colour reads as a pen in ink.
+const marker = drawing.add({ tool: 'highlighter', color: 'yellow', width: 24, points });
+assert.deepEqual(
+    (({ tool, color, width }) => ({ tool, color, width }))(get(drawing.strokes).find((s) => s.id === marker)),
+    { tool: 'highlighter', color: 'yellow', width: 24 },
+);
+sketch.doc.doc.transact(() => {
+    sketch.doc.doc.getMap(strokesName).get(marker).set('tool', 'chisel');
+    sketch.doc.doc.getMap(strokesName).get(marker).set('color', 'mauve');
+});
+assert.deepEqual((({ tool, color }) => ({ tool, color }))(get(drawing.strokes).find((s) => s.id === marker)), {
+    tool: 'pen',
+    color: 'ink',
+});
+// Erasing part of a stroke replaces it with what's left, at the same depth.
+const kept = get(drawing.strokes).find((s) => s.id === 'remotestroke0000000a');
+const pieceA = Float32Array.from([0, 0, 0.5, 0, 1, 1, 0.5, 1]);
+const pieceB = Float32Array.from([8, 8, 0.5, 2, 9, 9, 0.5, 3]);
+drawing.erase(
+    new Map([
+        ['remotestroke0000000a', [pieceA, pieceB]],
+        [marker, []],
+        ['alreadygone000000000', [pieceA]],
+    ]),
+);
+const afterErase = get(drawing.strokes);
+assert.equal(afterErase.length, 2, 'two pieces left; the erased and the missing strokes add nothing');
+assert.ok(!afterErase.some((s) => s.id === 'remotestroke0000000a' || s.id === marker));
+for (const piece of afterErase) {
+    assert.deepEqual(
+        (({ tool, color, width, created }) => ({ tool, color, width, created }))(piece),
+        (({ tool, color, width, created }) => ({ tool, color, width, created }))(kept),
+        'pieces keep the stroke they came from',
+    );
+}
+assert.deepEqual(
+    afterErase.map((s) => [...s.points]).sort((a, b) => a[0] - b[0]),
+    [[...pieceA], [...pieceB]],
+);
 assert.ok(sketch.plainText().includes('[Drawing]'), 'export marks where a drawing was');
 sketch.repairIndex();
 assert.equal(entry(sketchId).preview, '', 'a drawing adds nothing to the preview');
@@ -412,12 +493,13 @@ newer.uncheckAll();
 newer.removeChecked();
 newer.repairIndex();
 newer.newInk();
-assert.equal(newer.ink('strokes:refused').add({ color: 'ink', width: 4, points }), '');
+assert.equal(newer.ink('strokes:refused').add({ tool: 'pen', color: 'ink', width: 4, points }), '');
+newer.ink('strokes:refused').erase(new Map([['anything', []]]));
 newer.ink('strokes:refused').remove(['anything']);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

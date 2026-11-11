@@ -346,7 +346,8 @@ async function main() {
     assert.equal(remindParams.get('title'), 'Under');
     assert.equal(JSON.parse(remindParams.get('source')).fragment, `section-${sectionIds[1]}`);
 
-    // Drawings: the pen and the mouse draw, the eraser removes, undo brings it back.
+    // Drawings: the pen and the mouse draw, the eraser cuts, the stroke eraser
+    // removes, undo brings both back, and the highlighter shows what's under it.
     await page.js(`document.querySelector('.tiptap').editor.commands.focus('end')`);
     await tool(page, 'Add drawing');
     await until(page.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '0'`);
@@ -375,20 +376,41 @@ async function main() {
         })()`),
         'strokes are painted',
     );
+    const inkTool = (label) =>
+        page.js(
+            `[...document.querySelectorAll('.ink-tools button')].find((b) => b.textContent === ${JSON.stringify(label)}).click()`,
+        );
+    const eraseDown = async () => {
+        [ix, iy, iw, ih] = await inkBox();
+        await page.stroke([
+            [ix + iw * 0.25, iy + 20],
+            [ix + iw * 0.25, iy + 60],
+        ]);
+    };
     await sleep(500);
-    await page.js(
-        `[...document.querySelectorAll('.ink-tools button')].find((b) => b.textContent === 'Eraser').click()`,
-    );
-    [ix, iy, iw, ih] = await inkBox();
-    await page.stroke([
-        [ix + iw * 0.25, iy + 20],
-        [ix + iw * 0.25, iy + 60],
-    ]);
+    await inkTool('Eraser');
+    await eraseDown();
+    await until(page.js, `${inkStrokes} === '3'`); // The first stroke, cut in two.
+    await sleep(500);
+    await tool(page, 'Undo');
+    await until(page.js, `${inkStrokes} === '2'`);
+    await inkTool('Stroke eraser');
+    await eraseDown();
     await until(page.js, `${inkStrokes} === '1'`);
     await sleep(500);
     await tool(page, 'Undo');
     await until(page.js, `${inkStrokes} === '2'`);
-    await page.js(`[...document.querySelectorAll('.ink-tools button')].find((b) => b.textContent === 'Pen').click()`);
+    await inkTool('Highlighter');
+    [ix, iy, iw, ih] = await inkBox();
+    await page.stroke(across(140));
+    await until(page.js, `${inkStrokes} === '3'`);
+    const highlightAlpha = await page.js(`(() => {
+        const c = document.querySelector('.note-ink canvas');
+        const ratio = c.width / c.getBoundingClientRect().width;
+        return c.getContext('2d').getImageData(Math.round(${iw * 0.3} * ratio), Math.round(140 * ratio), 1, 1).data[3];
+    })()`);
+    assert.ok(highlightAlpha > 40 && highlightAlpha < 150, `the highlighter is see-through: alpha ${highlightAlpha}`);
+    await inkTool('Pen');
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -406,7 +428,7 @@ async function main() {
     await until(other.js, `${bodyHtml}.includes('<table') && ${bodyHtml}.includes('First line of the note')`);
     await until(other.js, `document.querySelectorAll('.note-checklist').length === 2`);
     await until(other.js, `document.querySelectorAll('.tiptap h2[data-section]').length === 2`);
-    await until(other.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '2'`);
+    await until(other.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '3'`);
     assert.deepEqual(
         await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
         sectionIds,
@@ -535,7 +557,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse and eraser, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter and both erasers, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

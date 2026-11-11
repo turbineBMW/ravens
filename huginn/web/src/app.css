@@ -533,8 +533,9 @@
     border-color: var(--accent);
     color: var(--on-accent);
 }
-.ink-swatches {
+.ink-group {
     display: inline-flex;
+    flex-wrap: wrap;
     gap: 4px;
 }
 .ink-tools .ink-swatch {
@@ -559,10 +560,26 @@
 .ink-swatch.green {
     background: var(--ok);
 }
+.ink-swatch.yellow {
+    background: var(--warn);
+}
+.ink-tools .ink-width {
+    width: 36px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+}
+.ink-width span {
+    width: var(--dot);
+    height: var(--dot);
+    border-radius: 50%;
+    background: currentColor;
+}
 .ink-tools .ink-swatch.ink[aria-pressed='true'],
 .ink-tools .ink-swatch.blue[aria-pressed='true'],
 .ink-tools .ink-swatch.red[aria-pressed='true'],
-.ink-tools .ink-swatch.green[aria-pressed='true'] {
+.ink-tools .ink-swatch.green[aria-pressed='true'],
+.ink-tools .ink-swatch.yellow[aria-pressed='true'] {
     border-color: var(--panel);
 }
 .ink-frame {

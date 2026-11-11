@@ -20,7 +20,10 @@
  *
  * Format 4 adds drawings. An `ink` block names its own top-level `strokes:<id>`
  * map, of stroke id to Y.Map { tool, color, width, created, points }. A stroke
- * never changes once drawn: erasing deletes it. `points` is binary, four
+ * never changes once drawn: erasing deletes it, and erasing part of one replaces
+ * it with the pieces left, which keep its `created` so they stay at its depth.
+ * `tool` is `pen` or `highlighter`; clients that predate the highlighter draw it
+ * as a pen. `points` is binary, four
  * little-endian float32s per sample (x, y, pressure, milliseconds since the
  * stroke began), with x and y in the block's own units, INK_WIDTH across, so a
  * drawing scales with the column instead of being cut off or distorted.
@@ -82,12 +85,14 @@ type YStroke = Y.Map<string | number | Uint8Array>;
 export const INK_WIDTH = 1000;
 /** Numbers per stored sample: x, y, pressure, milliseconds since the stroke began. */
 export const INK_STRIDE = 4;
-export const INK_COLORS = ['ink', 'blue', 'red', 'green'] as const;
+export const INK_COLORS = ['ink', 'blue', 'red', 'green', 'yellow'] as const;
 export type InkColor = (typeof INK_COLORS)[number];
+export const INK_TOOLS = ['pen', 'highlighter'] as const;
+export type InkTool = (typeof INK_TOOLS)[number];
 
 export interface Stroke {
     id: string;
-    tool: 'pen';
+    tool: InkTool;
     color: InkColor;
     /** In drawing units, at full pressure. */
     width: number;
@@ -112,10 +117,11 @@ export function decodePoints(bytes: Uint8Array): Float32Array {
 
 function readStroke(id: string, m: YStroke): Stroke {
     const color = String(m.get('color') ?? 'ink') as InkColor;
+    const tool = String(m.get('tool') ?? 'pen') as InkTool;
     const points = m.get('points');
     return {
         id,
-        tool: 'pen',
+        tool: INK_TOOLS.includes(tool) ? tool : 'pen',
         color: INK_COLORS.includes(color) ? color : 'ink',
         width: Number(m.get('width') ?? 4),
         created: Number(m.get('created') ?? 0),
@@ -123,12 +129,27 @@ function readStroke(id: string, m: YStroke): Stroke {
     };
 }
 
+function strokeMap(tool: InkTool, color: InkColor, width: number, created: number, points: Float32Array): YStroke {
+    const m = new Y.Map<string | number | Uint8Array>();
+    m.set('tool', tool);
+    m.set('color', color);
+    m.set('width', width);
+    m.set('created', created);
+    m.set('points', encodePoints(points));
+    return m;
+}
+
 /** One drawing: a strokes map, in the order they were drawn, and the edits it allows. */
 export interface InkModel {
     strokes: Readable<Stroke[]>;
     /** Store a finished stroke; returns its id. */
-    add(stroke: Pick<Stroke, 'color' | 'width' | 'points'>): string;
+    add(stroke: Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>): string;
     remove(ids: string[]): void;
+    /**
+     * One eraser gesture: each stroke named is replaced by the pieces left of it,
+     * none when it was erased entirely. Strokes already gone are left gone.
+     */
+    erase(changes: Map<string, Float32Array[]>): void;
 }
 
 // ---------- the migration ----------
@@ -545,20 +566,25 @@ export function openNote(id: string, index?: Index): Note {
                 map.forEach((m, sid) => all.push(readStroke(sid, m)));
                 return all.sort((a, b) => a.created - b.created || a.id.localeCompare(b.id));
             }),
-            add({ color, width, points }) {
+            add({ tool, color, width, points }) {
                 if (isTooNew()) return '';
                 const sid = newId();
-                doc.doc.transact(() => {
-                    const m = new Y.Map<string | number | Uint8Array>();
-                    m.set('tool', 'pen');
-                    m.set('color', color);
-                    m.set('width', width);
-                    m.set('created', Date.now());
-                    m.set('points', encodePoints(points));
-                    map.set(sid, m);
-                });
+                doc.doc.transact(() => map.set(sid, strokeMap(tool, color, width, Date.now(), points)));
                 touched();
                 return sid;
+            },
+            erase(changes) {
+                if (isTooNew() || !changes.size) return;
+                doc.doc.transact(() => {
+                    for (const [sid, pieces] of changes) {
+                        const old = map.get(sid);
+                        if (!old) continue;
+                        const { tool, color, width, created } = readStroke(sid, old);
+                        map.delete(sid);
+                        for (const points of pieces) map.set(newId(), strokeMap(tool, color, width, created, points));
+                    }
+                });
+                touched();
             },
             remove(ids) {
                 if (isTooNew() || !ids.length) return;
