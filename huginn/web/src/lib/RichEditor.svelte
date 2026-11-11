@@ -3,7 +3,8 @@
      * The note's body: Tiptap on the note's Yjs fragment. Undo covers this
      * device's edits to the prose and the checklist together, and never another
      * device's or the migration's. A checklist block only shows the items map it
-     * names, so pasted or dragged copies are refused rather than sharing that map.
+     * names, and a drawing the strokes map it names, so pasted or dragged copies
+     * of either are refused rather than sharing that map.
      */
     import { Editor, Node, type CommandProps } from '@tiptap/core';
     import Collaboration from '@tiptap/extension-collaboration';
@@ -16,6 +17,7 @@
     import { mount, onMount, unmount } from 'svelte';
     import * as Y from 'yjs';
     import ChecklistBlock from '$lib/ChecklistBlock.svelte';
+    import InkBlock from '$lib/InkBlock.svelte';
     import { remindMeHref } from '$lib/links';
     import { Sections, revealSection, sectionAt } from '$lib/sections';
     import type { Note } from '$lib/notes';
@@ -64,10 +66,11 @@
         }
     }
 
-    /** Step off a selected checklist, so what's inserted next goes after it, not over it. */
-    function pastChecklist({ tr, dispatch }: CommandProps) {
+    /** Step off a selected checklist or drawing, so what's inserted next goes after it, not over it. */
+    function pastBlock({ tr, dispatch }: CommandProps) {
         const { selection } = tr;
-        if (selection instanceof NodeSelection && selection.node.type.name === 'checklist' && dispatch) {
+        const atom = selection instanceof NodeSelection && ['checklist', 'ink'].includes(selection.node.type.name);
+        if (atom && dispatch) {
             tr.setSelection(TextSelection.near(tr.doc.resolve(selection.to), 1));
         }
         return true;
@@ -135,6 +138,33 @@
                     };
                 },
         });
+        const Ink = Node.create({
+            name: 'ink',
+            group: 'block',
+            atom: true,
+            selectable: true,
+            draggable: false,
+            addAttributes: () => ({ strokes: { default: 'strokes' } }),
+            parseHTML: () => [],
+            renderHTML: () => ['div', { 'data-ink': '' }],
+            addNodeView:
+                () =>
+                ({ node }) => {
+                    const name = String(node.attrs.strokes);
+                    undo.addToScope(note.inkMap(name));
+                    const dom = document.createElement('div');
+                    dom.className = 'note-ink';
+                    dom.contentEditable = 'false';
+                    const block = mount(InkBlock, { target: dom, props: { note, name } });
+                    return {
+                        dom,
+                        // The canvas and its tools handle their own pointers.
+                        stopEvent: () => true,
+                        ignoreMutation: () => true,
+                        destroy: () => void unmount(block),
+                    };
+                },
+        });
         const created = new Editor({
             element: host,
             extensions: [
@@ -143,6 +173,7 @@
                 TableKit.configure({ table: { resizable: false } }),
                 Placeholder.configure({ placeholder: 'Start writing' }),
                 Checklist,
+                Ink,
                 Sections.configure({ noteId: id }),
                 Collaboration.configure({ fragment: note.body, yUndoOptions: { undoManager: undo } }),
             ],
@@ -221,15 +252,22 @@
     <span class="sep"></span>
     {@render tool('Add checklist', 'Checklist', () =>
         chain()
-            .command(pastChecklist)
+            .command(pastBlock)
             .insertContent({ type: 'checklist', attrs: { list: note.newList() } })
-            .command(pastChecklist)
+            .command(pastBlock)
+            .run(),
+    )}
+    {@render tool('Add drawing', 'Drawing', () =>
+        chain()
+            .command(pastBlock)
+            .insertContent({ type: 'ink', attrs: { strokes: note.newInk() } })
+            .command(pastBlock)
             .run(),
     )}
     {@render tool('Add table', 'Table', () =>
-        chain().command(pastChecklist).insertTable({ rows: 2, cols: 2, withHeaderRow: false }).run(),
+        chain().command(pastBlock).insertTable({ rows: 2, cols: 2, withHeaderRow: false }).run(),
     )}
-    {@render tool('Add divider', 'Divider', () => chain().command(pastChecklist).setHorizontalRule().run())}
+    {@render tool('Add divider', 'Divider', () => chain().command(pastBlock).setHorizontalRule().run())}
     {#if inTable}
         <span class="sep"></span>
         {@render tool('Add row', '+ Row', () => chain().addRowAfter().run())}

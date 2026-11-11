@@ -10,7 +10,7 @@ const id = 'demo' + Date.now().toString(36);
 const synced = (p) => new Promise((r) => (p.synced ? r() : p.once('sync', r)));
 const open = (room) => {
     const doc = new Y.Doc();
-    const p = new WebsocketProvider(url, room, doc, { params: { v: '3' }, WebSocketPolyfill: globalThis.WebSocket, disableBc: true });
+    const p = new WebsocketProvider(url, room, doc, { params: { v: '4' }, WebSocketPolyfill: globalThis.WebSocket, disableBc: true });
     return { doc, p };
 };
 

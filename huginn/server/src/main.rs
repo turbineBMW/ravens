@@ -14,8 +14,9 @@ fn routes(_state: SharedState) -> Router<SharedState> {
 fn main() -> anyhow::Result<()> {
     raven_server::run(AppSpec {
         app: RavenApp::Huginn,
-        // Several checklists: older clients would show every block as the first list.
-        min_client: 3,
+        // Drawings (note format 4). Format 3 clients already refuse to edit those
+        // notes; this keeps the client and the format moving together.
+        min_client: 4,
         migrations: MIGRATIONS,
         routes,
         on_change: None,

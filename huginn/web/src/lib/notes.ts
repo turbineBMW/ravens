@@ -17,6 +17,13 @@
  * only a title the user set: without one, the title is the note's first line.
  * Format 3 is the same with more checklists, each its own top-level `items:<id>`
  * map named by the block's `list` attribute.
+ *
+ * Format 4 adds drawings. An `ink` block names its own top-level `strokes:<id>`
+ * map, of stroke id to Y.Map { tool, color, width, created, points }. A stroke
+ * never changes once drawn: erasing deletes it. `points` is binary, four
+ * little-endian float32s per sample (x, y, pressure, milliseconds since the
+ * stroke began), with x and y in the block's own units, INK_WIDTH across, so a
+ * drawing scales with the column instead of being cut off or distorted.
  */
 import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
@@ -27,7 +34,11 @@ import { readable, type Readable } from 'svelte/store';
 export type NoteKind = 'checklist' | 'text';
 
 /** The newest note format this client can safely edit. */
-export const NOTE_FORMAT = 3;
+export const NOTE_FORMAT = 4;
+/** A note with more than its first checklist. */
+const SEVERAL_LISTS_FORMAT = 3;
+/** A note with a drawing. */
+const INK_FORMAT = 4;
 
 /** What migrated and new notes are: format 3 is only a note with more than the first list. */
 const BASE_FORMAT = 2;
@@ -63,6 +74,62 @@ export interface Item {
 
 type YNoteMeta = Y.Map<string | number | boolean>;
 type YItem = Y.Map<string | number | boolean>;
+type YStroke = Y.Map<string | number | Uint8Array>;
+
+// ---------- ink ----------
+
+/** A drawing's width in its own units; the block scales them to the column. */
+export const INK_WIDTH = 1000;
+/** Numbers per stored sample: x, y, pressure, milliseconds since the stroke began. */
+export const INK_STRIDE = 4;
+export const INK_COLORS = ['ink', 'blue', 'red', 'green'] as const;
+export type InkColor = (typeof INK_COLORS)[number];
+
+export interface Stroke {
+    id: string;
+    tool: 'pen';
+    color: InkColor;
+    /** In drawing units, at full pressure. */
+    width: number;
+    created: number;
+    /** INK_STRIDE numbers per sample. */
+    points: Float32Array;
+}
+
+export function encodePoints(points: Float32Array): Uint8Array {
+    const bytes = new Uint8Array(points.length * 4);
+    const view = new DataView(bytes.buffer);
+    points.forEach((n, i) => view.setFloat32(i * 4, n, true));
+    return bytes;
+}
+
+export function decodePoints(bytes: Uint8Array): Float32Array {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const points = new Float32Array(Math.floor(bytes.byteLength / 4 / INK_STRIDE) * INK_STRIDE);
+    for (let i = 0; i < points.length; i++) points[i] = view.getFloat32(i * 4, true);
+    return points;
+}
+
+function readStroke(id: string, m: YStroke): Stroke {
+    const color = String(m.get('color') ?? 'ink') as InkColor;
+    const points = m.get('points');
+    return {
+        id,
+        tool: 'pen',
+        color: INK_COLORS.includes(color) ? color : 'ink',
+        width: Number(m.get('width') ?? 4),
+        created: Number(m.get('created') ?? 0),
+        points: points instanceof Uint8Array ? decodePoints(points) : new Float32Array(),
+    };
+}
+
+/** One drawing: a strokes map, in the order they were drawn, and the edits it allows. */
+export interface InkModel {
+    strokes: Readable<Stroke[]>;
+    /** Store a finished stroke; returns its id. */
+    add(stroke: Pick<Stroke, 'color' | 'width' | 'points'>): string;
+    remove(ids: string[]): void;
+}
 
 // ---------- the migration ----------
 
@@ -270,6 +337,12 @@ export interface Note extends ChecklistModel {
     listMap(name: string): Y.Map<unknown>;
     /** Prepare a new checklist for a block to point at; returns its name. */
     newList(): string;
+    /** The drawing an ink block points at. */
+    ink(name: string): InkModel;
+    /** The shared map behind a drawing, for undo. */
+    inkMap(name: string): Y.Map<unknown>;
+    /** Prepare a new drawing for a block to point at; returns its name. */
+    newInk(): string;
     /** Check off nothing and everything: these two cover every checklist in the note. */
     uncheckEverything(): void;
     removeAllChecked(): void;
@@ -461,6 +534,48 @@ export function openNote(id: string, index?: Index): Note {
         lists.set(name, model);
         return model;
     };
+    const drawings = new Map<string, InkModel>();
+    const ink = (name: string): InkModel => {
+        const cached = drawings.get(name);
+        if (cached) return cached;
+        const map = doc.doc.getMap<YStroke>(name);
+        const model: InkModel = {
+            strokes: yStore(map, () => {
+                const all: Stroke[] = [];
+                map.forEach((m, sid) => all.push(readStroke(sid, m)));
+                return all.sort((a, b) => a.created - b.created || a.id.localeCompare(b.id));
+            }),
+            add({ color, width, points }) {
+                if (isTooNew()) return '';
+                const sid = newId();
+                doc.doc.transact(() => {
+                    const m = new Y.Map<string | number | Uint8Array>();
+                    m.set('tool', 'pen');
+                    m.set('color', color);
+                    m.set('width', width);
+                    m.set('created', Date.now());
+                    m.set('points', encodePoints(points));
+                    map.set(sid, m);
+                });
+                touched();
+                return sid;
+            },
+            remove(ids) {
+                if (isTooNew() || !ids.length) return;
+                doc.doc.transact(() => {
+                    for (const sid of ids) map.delete(sid);
+                });
+                touched();
+            },
+        };
+        drawings.set(name, model);
+        return model;
+    };
+    /** Raise the note's format to at least `format`, for a block older clients can't show. */
+    const needFormat = (format: number) => {
+        if (Number(meta.get('format') ?? 0) < format) meta.set('format', format);
+    };
+
     const shownNames = () => {
         if (!meta.has('format')) return [FIRST_LIST];
         const named = blocks()
@@ -506,7 +621,9 @@ export function openNote(id: string, index?: Index): Note {
             const lines = blocks().flatMap((block) =>
                 block.nodeName === 'checklist'
                     ? readList(listOf(block)).map((i) => `[${i.checked ? 'x' : ' '}] ${i.text}`)
-                    : blockLines(block, true),
+                    : block.nodeName === 'ink'
+                      ? ['[Drawing]']
+                      : blockLines(block, true),
             );
             return [...(explicit ? [explicit, ''] : []), ...lines].join('\n').trim() + '\n';
         },
@@ -520,8 +637,14 @@ export function openNote(id: string, index?: Index): Note {
         listMap: (name) => doc.doc.getMap(name),
         newList() {
             if (isTooNew()) return FIRST_LIST;
-            if (Number(meta.get('format') ?? 0) < NOTE_FORMAT) meta.set('format', NOTE_FORMAT);
+            needFormat(SEVERAL_LISTS_FORMAT);
             return `${FIRST_LIST}:${newId()}`;
+        },
+        ink,
+        inkMap: (name) => doc.doc.getMap(name),
+        newInk() {
+            if (!isTooNew()) needFormat(INK_FORMAT);
+            return `strokes:${newId()}`;
         },
         uncheckEverything() {
             for (const name of shownNames()) list(name).uncheckAll();
