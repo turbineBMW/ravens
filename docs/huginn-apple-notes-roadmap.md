@@ -2,6 +2,20 @@
 
 Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current working tree. The baseline below records the initial review; implementation progress is tracked separately here.
 
+## Current status
+
+As of November 10, 2026, at `5513158`:
+
+| Phase | State |
+| --- | --- |
+| P0 Data safety | Done except purge tombstones and identity-scoped caches, deferred during alpha (see below). |
+| P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
+| P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
+| P5 Ink | **Next.** Brought ahead of P3 and P4; see [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
+| P3, P4, P6–P9 | Not started. |
+
+The increment notes below are a history of what each step shipped; this table is the summary.
+
 ## First implementation increment
 
 Implemented in the working tree on November 1, 2026:
@@ -215,7 +229,9 @@ Size is relative engineering complexity: S small, M medium, L large, XL a substa
 
 **Several checklists, on the `huginn-several-checklists` branch:** each new checklist block names its own `items:<id>` map, and format 1 notes keep `items`. A note becomes format 3 when it first gets one, `NOTE_FORMAT` and `CLIENT_VERSION` are 3, and Huginn's `min_client` is 3. Removing a block leaves its items stored but out of the note's text and counts; undo brings them back during the session.
 
-Still to do in this phase: collapsible sections with stable IDs, selected-text-to-reminder, and rich/plain paste choices. Moving to format 2 cannot be undone by downgrading: rollback means restoring a backup.
+**Sections, reminders and paste (PR #10):** headings get a stable section ID that syncs. Collapsing a section hides everything up to the next heading at its level or above; that is view state, so it stays on the device and is remembered per note. *Remind me* turns the selected text into a Muninn reminder that links back to its section, and opening the link expands the section. *Paste text* pastes the clipboard as plain text.
+
+Phase 2's code is complete. Still open: the exit checks on hardware, meaning touch selection, the soft keyboard and IME composition on the Surface and Fold, and two offline devices reconnecting. Moving to format 2 cannot be undone by downgrading: rollback means restoring a backup.
 
 **Size L. Dependency: P0 schema/migration contract, P1 shell.** This is the largest early product improvement.
 
@@ -255,6 +271,14 @@ Still to do in this phase: collapsible sections with stable IDs, selected-text-t
 ### Phase 5 — Editable ink for Surface and Fold
 
 **Size L. Dependency: P2 ink nodes; P4 for image-backed ink and exports.** Prioritize this before advanced collaboration because pen use is central to the project.
+
+**Next, chosen November 10, 2026, ahead of P3 and P4.** P2 did not add an ink node, so this phase starts by adding one. Image-backed ink and ink in exports wait for P4. Suggested first increments:
+
+1. An ink region block in the note body that names its own stroke map, as checklist blocks name `items:<id>`: stroke IDs, points with pressure, tool, width and colour. It raises `NOTE_FORMAT`, `CLIENT_VERSION` and Huginn's `min_client`.
+2. Pen drawing in that block with finger scrolling kept separate, drawn from the `spikes/pen` findings, plus a canvas renderer that is separate from storage. This includes a mouse and finger drawing mode for when no pen is available.
+3. Eraser, undo/redo and width/colour, then lasso, move/resize, ruler and paper styles.
+
+The Fold has not yet been tested with a pen. Run `spikes/pen` on it before relying on the S Pen path.
 
 - Integrate the existing pen spike findings. Confirm actual Fold model and pen support using the spike; retain finger/mouse drawing when pen hardware is unavailable.
 - Stable stroke IDs and pressure-aware samples, rendering separate from storage, pen/highlighter/eraser, width/color, undo/redo, lasso selection, move/resize, ruler/straight lines, and paper lines/grids.
@@ -316,7 +340,7 @@ Still to do in this phase: collapsible sections with stable IDs, selected-text-t
 
 ## Recommended implementation sequence and review gates
 
-Start with **P0 safety plus P1 responsive shell**, then **P2 rich notes**. Ship P3 and P4 before broad migration from Apple Notes. Bring P5 ink forward as soon as the mixed-content schema is stable. P6 and P7 can be scheduled independently after their dependencies; P8 requires earlier design work but does not need to block a personal everyday release.
+Start with **P0 safety plus P1 responsive shell**, then **P2 rich notes**. Ship P3 and P4 before broad migration from Apple Notes. Bring P5 ink forward as soon as the mixed-content schema is stable. That point came with format 3, so the order is now P5, then P3 and P4. P6 and P7 can be scheduled independently after their dependencies; P8 requires earlier design work but does not need to block a personal everyday release.
 
 The first reviewable implementation slices should be:
 

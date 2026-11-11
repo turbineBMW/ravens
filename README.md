@@ -139,5 +139,7 @@ criteria for each phase.
 2. The shell: identity, theme, installable.
 3. Huginn checklists on the sync layer: the Keep grocery list, done right.
 4. Deployed to the Mac mini behind `tailscale serve` (2026-11-01).
-5. Muninn lists, due dates, flags, subtasks, smart views; then notifications and the link. **← here**
-6. Huginn rich text, then ink.
+5. Muninn lists, due dates, flags, subtasks, smart views; then notifications and the link.
+6. Huginn rich text (roadmap Phase 2, PRs #8–#10).
+7. Huginn ink (roadmap Phase 5). **← here**
+8. Huginn organization and search, then attachments and export (roadmap Phases 3 and 4).
