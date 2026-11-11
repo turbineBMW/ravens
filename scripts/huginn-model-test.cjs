@@ -29,7 +29,8 @@ new Function('require', 'exports', compiled)((name) => {
     if (name === '@ravens/ui/sync') return sync;
     return require(name);
 }, model.exports);
-const { NOTE_FORMAT, migrationSeed, openIndex, openNote, sortItems } = model.exports;
+const { NOTE_FORMAT, INK_STRIDE, decodePoints, encodePoints, migrationSeed, openIndex, openNote, sortItems } =
+    model.exports;
 const index = openIndex();
 const id = index.create('checklist');
 const note = openNote(id, index);
@@ -102,7 +103,7 @@ const open = (id) => {
 };
 const entry = (id) => get(fixtureIndex.notes).find((n) => n.id === id);
 const groceries = open(GROCERIES);
-assert.equal(NOTE_FORMAT, 3);
+assert.equal(NOTE_FORMAT, 4);
 assert.equal(get(groceries.tooNew), false, 'a note without a format is format 1');
 assert.equal(get(groceries.title), 'Groceries');
 assert.deepEqual(
@@ -332,6 +333,67 @@ for (const line of ['Groceries', '[ ] Milk', '[x] Coffee', 'Plain bold', '- In a
     assert.ok(exported.split('\n').includes(line), `export lacks "${line}": ${exported}`);
 }
 
+// Drawings: format 4, strokes in their own map, merging from two devices.
+const sketchId = fixtureIndex.create('text');
+const sketch = openNote(sketchId, fixtureIndex);
+sketch.initialise();
+const extraList = sketch.newList();
+assert.equal(get(sketch.format), 3);
+const strokesName = sketch.newInk();
+assert.match(strokesName, /^strokes:/);
+assert.notEqual(sketch.newInk(), strokesName, 'every drawing gets its own map');
+assert.equal(get(sketch.format), 4, 'a drawing marks the note for clients that understand it');
+sketch.newList();
+assert.equal(get(sketch.format), 4, 'a later checklist does not lower the format');
+const inkBlock = new Y.XmlElement('ink');
+inkBlock.setAttribute('strokes', strokesName);
+const listBlock = new Y.XmlElement('checklist');
+listBlock.setAttribute('list', extraList);
+sketch.doc.doc.transact(() => sketch.body.insert(sketch.body.length, [inkBlock, listBlock]));
+const points = Float32Array.from([10.5, 20.25, 0.5, 0, 30, 40, 0.875, 8.5]);
+assert.deepEqual([...decodePoints(encodePoints(points))], [...points], 'points survive encoding');
+assert.equal(encodePoints(points).byteLength, points.length * 4);
+assert.equal(INK_STRIDE, 4);
+const drawing = sketch.ink(strokesName);
+assert.equal(sketch.ink(strokesName), drawing, 'one model per drawing');
+const first = drawing.add({ color: 'blue', width: 4, points });
+assert.ok(first);
+const otherDevice = new Y.Doc();
+Y.applyUpdate(otherDevice, Y.encodeStateAsUpdate(sketch.doc.doc));
+// Offline on both: this device draws again, the other erases the first stroke and draws its own.
+const second = drawing.add({ color: 'ink', width: 4, points: Float32Array.from([1, 2, 0.3, 0]) });
+otherDevice.transact(() => {
+    const strokes = otherDevice.getMap(strokesName);
+    strokes.delete(first);
+    const m = new Y.Map();
+    m.set('tool', 'pen');
+    m.set('color', 'red');
+    m.set('width', 6);
+    m.set('created', 1);
+    m.set('points', encodePoints(Float32Array.from([5, 5, 1, 0, 6, 6, 1, 4])));
+    strokes.set('remotestroke0000000a', m);
+});
+Y.applyUpdate(sketch.doc.doc, Y.encodeStateAsUpdate(otherDevice));
+Y.applyUpdate(otherDevice, Y.encodeStateAsUpdate(sketch.doc.doc));
+const merged = get(drawing.strokes);
+assert.deepEqual(
+    merged.map((s) => s.id),
+    ['remotestroke0000000a', second],
+    "both devices keep each other's strokes and the erase, oldest first",
+);
+assert.equal(merged[0].color, 'red');
+assert.deepEqual([...merged[0].points], [5, 5, 1, 0, 6, 6, 1, 4]);
+assert.equal(otherDevice.getMap(strokesName).size, 2, 'the other device converges too');
+drawing.remove([second]);
+assert.deepEqual(
+    get(drawing.strokes).map((s) => s.id),
+    ['remotestroke0000000a'],
+);
+assert.ok(sketch.plainText().includes('[Drawing]'), 'export marks where a drawing was');
+sketch.repairIndex();
+assert.equal(entry(sketchId).preview, '', 'a drawing adds nothing to the preview');
+otherDevice.destroy();
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
@@ -349,10 +411,13 @@ newer.remove('itemmilk0000000000a1');
 newer.uncheckAll();
 newer.removeChecked();
 newer.repairIndex();
+newer.newInk();
+assert.equal(newer.ink('strokes:refused').add({ color: 'ink', width: 4, points }), '');
+newer.ink('strokes:refused').remove(['anything']);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

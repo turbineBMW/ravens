@@ -1,5 +1,5 @@
 // Drive the built client in headless Chromium against a throwaway server: rich
-// text, a format 1 note written by the old code, save confirmation through a
+// text, drawings, a format 1 note written by the old code, save confirmation through a
 // server outage, a second device, an old client being turned away, opening a
 // note offline, resizing, narrow widths and navigation.
 //
@@ -130,6 +130,26 @@ async function device() {
             }
             await sleep(100);
             await mouse('mouseReleased', to, 0);
+        },
+        /** A stroke through `points`, from a pen pressing at `force` or the mouse. */
+        stroke: async (points, pointerType = 'mouse', force = 0.5) => {
+            const at = (type, [x, y], buttons) =>
+                call('Input.dispatchMouseEvent', {
+                    type,
+                    x,
+                    y,
+                    button: 'left',
+                    buttons,
+                    clickCount: 1,
+                    pointerType,
+                    force: buttons ? force : 0,
+                });
+            await at('mousePressed', points[0], 1);
+            for (const point of points.slice(1)) {
+                await at('mouseMoved', point, 1);
+                await sleep(16);
+            }
+            await at('mouseReleased', points[points.length - 1], 0);
         },
         go: async (url) => {
             await call('Page.navigate', { url });
@@ -325,6 +345,50 @@ async function main() {
     const remindParams = new URL(remindHref, BASE).searchParams;
     assert.equal(remindParams.get('title'), 'Under');
     assert.equal(JSON.parse(remindParams.get('source')).fragment, `section-${sectionIds[1]}`);
+
+    // Drawings: the pen and the mouse draw, the eraser removes, undo brings it back.
+    await page.js(`document.querySelector('.tiptap').editor.commands.focus('end')`);
+    await tool(page, 'Add drawing');
+    await until(page.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '0'`);
+    const inkStrokes = `document.querySelector('.note-ink canvas').dataset.strokes`;
+    const inkBox = async () => {
+        await page.js(`document.querySelector('.note-ink').scrollIntoView({ block: 'center' })`);
+        await sleep(100);
+        return page.js(
+            `(() => { const r = document.querySelector('.note-ink canvas').getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()`,
+        );
+    };
+    let [ix, iy, iw, ih] = await inkBox();
+    assert.ok(iw > 100 && ih > 50, `drawing is laid out: ${iw}x${ih}`);
+    const across = (y) => [0.1, 0.2, 0.3, 0.4, 0.5].map((f) => [ix + iw * f, iy + y]);
+    await page.stroke(across(40), 'pen', 0.8);
+    await until(page.js, `${inkStrokes} === '1'`);
+    await sleep(500); // Past undo's grouping window.
+    await page.stroke(across(90), 'mouse');
+    await until(page.js, `${inkStrokes} === '2'`);
+    assert.ok(
+        await page.js(`(() => {
+            const c = document.querySelector('.note-ink canvas');
+            const data = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+            for (let i = 3; i < data.length; i += 4) if (data[i]) return true;
+            return false;
+        })()`),
+        'strokes are painted',
+    );
+    await sleep(500);
+    await page.js(
+        `[...document.querySelectorAll('.ink-tools button')].find((b) => b.textContent === 'Eraser').click()`,
+    );
+    [ix, iy, iw, ih] = await inkBox();
+    await page.stroke([
+        [ix + iw * 0.25, iy + 20],
+        [ix + iw * 0.25, iy + 60],
+    ]);
+    await until(page.js, `${inkStrokes} === '1'`);
+    await sleep(500);
+    await tool(page, 'Undo');
+    await until(page.js, `${inkStrokes} === '2'`);
+    await page.js(`[...document.querySelectorAll('.ink-tools button')].find((b) => b.textContent === 'Pen').click()`);
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -342,6 +406,7 @@ async function main() {
     await until(other.js, `${bodyHtml}.includes('<table') && ${bodyHtml}.includes('First line of the note')`);
     await until(other.js, `document.querySelectorAll('.note-checklist').length === 2`);
     await until(other.js, `document.querySelectorAll('.tiptap h2[data-section]').length === 2`);
+    await until(other.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '2'`);
     assert.deepEqual(
         await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
         sectionIds,
@@ -470,7 +535,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse and eraser, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 
