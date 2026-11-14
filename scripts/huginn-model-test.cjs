@@ -29,8 +29,20 @@ new Function('require', 'exports', compiled)((name) => {
     if (name === '@ravens/ui/sync') return sync;
     return require(name);
 }, model.exports);
-const { NOTE_FORMAT, INK_STRIDE, decodePoints, encodePoints, migrationSeed, openIndex, openNote, sortItems } =
-    model.exports;
+const {
+    NOTE_FORMAT,
+    INK_STRIDE,
+    SKETCH_MAX_BYTES,
+    SKETCH_SIZE,
+    decodePoints,
+    decodeSketch,
+    encodePoints,
+    encodeSketch,
+    migrationSeed,
+    openIndex,
+    openNote,
+    sortItems,
+} = model.exports;
 const geometry = { exports: {} };
 new Function(
     'require',
@@ -127,6 +139,39 @@ new Function(
     assert.equal(rulerDegrees(degrees(150)), 30);
     assert.equal(rulerDegrees(degrees(90)), 90);
     assert.equal(rulerDegrees(degrees(180)), 0);
+}
+
+{
+    // Sketches: a drawing cropped to its ink and scaled to SKETCH_SIZE, one byte per coordinate.
+    const stroke = (tool, color, width, xy, created = 0) => ({
+        id: `s${created}`,
+        tool,
+        color,
+        width,
+        created,
+        points: Float32Array.from(xy.flatMap((v, i) => (i % 2 ? [v, 0.5, 0] : [v]))),
+    });
+    assert.equal(encodeSketch([]), null, 'no strokes, no sketch');
+    // A 500 by 250 box of ink (widths included), drawn at x 100 to 600.
+    const box = [stroke('pen', 'blue', 10, [105, 205, 595, 445]), stroke('highlighter', 'yellow', 10, [105, 445])];
+    const bytes = encodeSketch(box);
+    const sketch = decodeSketch(bytes);
+    assert.deepEqual([sketch.width, sketch.height], [SKETCH_SIZE, 128], 'the longer side fills the sketch');
+    assert.deepEqual(sketch.strokes[0], { tool: 'pen', color: 'blue', width: 5, points: [3, 3, 252, 125] });
+    assert.deepEqual(sketch.strokes[1], { tool: 'highlighter', color: 'yellow', width: 5, points: [3, 125] });
+    // A straight line sampled 500 times keeps only its ends.
+    const straight = Array.from({ length: 500 }, (_, i) => [i, i / 2]).flat();
+    assert.equal(decodeSketch(encodeSketch([stroke('pen', 'ink', 2, straight)])).strokes[0].points.length, 4);
+    // A busy drawing is simplified, then cut short, to fit.
+    let seed = 7;
+    const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 1000;
+    const busy = Array.from({ length: 200 }, (_, i) => stroke('pen', 'ink', 2, Array.from({ length: 80 }, random), i));
+    const crowded = encodeSketch(busy);
+    assert.ok(crowded.length <= SKETCH_MAX_BYTES, `a busy drawing fits: ${crowded.length} bytes`);
+    const kept = decodeSketch(crowded).strokes;
+    assert.ok(kept.length > 0 && kept.length < busy.length, 'keeping the oldest strokes that fit');
+    assert.equal(decodeSketch(Uint8Array.from([2, 10, 10])), null, 'a newer sketch is not misread');
+    assert.equal(decodeSketch(bytes.subarray(0, bytes.length - 1)).strokes.length, 1, 'a cut-off stroke is dropped');
 }
 
 const index = openIndex();
@@ -572,9 +617,22 @@ drawing.setPaper('plain');
 assert.ok(!sketch.paperMap.has(strokesName), 'plain paper takes no room');
 assert.equal(get(sketch.ink(sketch.newInk()).paper), 'plain', 'each drawing has its own paper');
 assert.equal(get(sketch.format), 4, 'moving and paper need no new format');
+// The index keeps a sketch of the first drawing for the notes list, and repair fills one in.
+sketch.repairIndex();
+const thumbnail = decodeSketch(entry(sketchId).sketch);
+assert.equal(thumbnail.strokes.length, get(drawing.strokes).length, 'the thumbnail shows the first drawing');
+fixtureIndex.doc.doc.getMap('notes').get(sketchId).delete('sketch');
+sketch.repairIndex();
+assert.ok(entry(sketchId).sketch, 'repair restores a missing sketch');
+const withSketch = stateOf(fixtureIndex.doc.doc);
+sketch.repairIndex();
+assert.equal(stateOf(fixtureIndex.doc.doc), withSketch, 'and writes nothing when it is already right');
 assert.ok(sketch.plainText().includes('[Drawing]'), 'export marks where a drawing was');
 sketch.repairIndex();
 assert.equal(entry(sketchId).preview, '', 'a drawing adds nothing to the preview');
+drawing.remove(get(drawing.strokes).map((s) => s.id));
+assert.equal(entry(sketchId).sketch, null, 'erasing the drawing clears its thumbnail');
+assert.equal(entry(freshId).sketch, null, 'a note without a drawing has none');
 otherDevice.destroy();
 
 // A note from a newer client can't be changed by this one, in any way.
@@ -603,7 +661,7 @@ newer.ink('strokes:refused').setPaper('grid');
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

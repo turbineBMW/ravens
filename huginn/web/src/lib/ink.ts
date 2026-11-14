@@ -22,7 +22,7 @@ export const WIDTHS: Record<InkTool, readonly [number, number, number]> = {
 };
 
 /** Each colour follows the theme, including the Omarchy one. */
-const COLOR_VARS: Record<InkColor, string> = {
+export const COLOR_VARS: Record<InkColor, string> = {
     ink: '--ink',
     blue: '--accent-2',
     red: '--danger',
