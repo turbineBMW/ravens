@@ -168,29 +168,9 @@ impl SyncHub {
     }
 
     fn load(&self, key: &DocKey) -> Result<Doc> {
-        let doc = Doc::new();
         let conn = self.db.lock().unwrap_or_else(|e| e.into_inner());
-        let state: Option<Vec<u8>> = conn
-            .query_row(
-                "SELECT state FROM ydocs WHERE owner = ?1 AND name = ?2",
-                params![key.owner, key.name],
-                |r| r.get(0),
-            )
-            .ok();
-        let updates: Vec<Vec<u8>> = conn
-            .prepare("SELECT data FROM yupdates WHERE owner = ?1 AND name = ?2 ORDER BY id")?
-            .query_map(params![key.owner, key.name], |r| r.get(0))?
-            .collect::<std::result::Result<_, _>>()?;
-        {
-            let mut txn = doc.transact_mut();
-            if let Some(state) = state {
-                txn.apply_update(Update::decode_v1(&state).context("stored state")?)?;
-            }
-            for u in &updates {
-                txn.apply_update(Update::decode_v1(u).context("stored update")?)?;
-            }
-        }
-        if updates.len() >= COMPACT_AFTER {
+        let (doc, updates) = stored(&conn, key)?;
+        if updates >= COMPACT_AFTER {
             let state = doc
                 .transact()
                 .encode_state_as_update_v1(&StateVector::default());
@@ -206,7 +186,7 @@ impl SyncHub {
             tracing::info!(
                 owner = key.owner,
                 name = key.name,
-                updates = updates.len(),
+                updates,
                 "compacted document"
             );
         }
@@ -251,6 +231,35 @@ impl SyncHub {
             }
         });
     }
+}
+
+/// A document as stored: its last snapshot with every later update applied,
+/// and how many updates that was. Reads only; an empty document when there is
+/// none. For an app reading documents outside a sync session, such as
+/// indexing them on startup, under the same lock as `OnChange`.
+pub fn stored(conn: &Connection, key: &DocKey) -> Result<(Doc, usize)> {
+    let doc = Doc::new();
+    let state: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT state FROM ydocs WHERE owner = ?1 AND name = ?2",
+            params![key.owner, key.name],
+            |r| r.get(0),
+        )
+        .ok();
+    let updates: Vec<Vec<u8>> = conn
+        .prepare("SELECT data FROM yupdates WHERE owner = ?1 AND name = ?2 ORDER BY id")?
+        .query_map(params![key.owner, key.name], |r| r.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    {
+        let mut txn = doc.transact_mut();
+        if let Some(state) = state {
+            txn.apply_update(Update::decode_v1(&state).context("stored state")?)?;
+        }
+        for u in &updates {
+            txn.apply_update(Update::decode_v1(u).context("stored update")?)?;
+        }
+    }
+    Ok((doc, updates.len()))
 }
 
 /// Reading plain values out of a document, for an app's `OnChange`.

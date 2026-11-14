@@ -1296,6 +1296,10 @@ dependencies = [
  "axum",
  "raven-core",
  "raven-server",
+ "rusqlite",
+ "serde",
+ "tracing",
+ "yrs",
 ]
 
 [[package]]

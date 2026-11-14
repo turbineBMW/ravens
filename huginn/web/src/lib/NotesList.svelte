@@ -6,6 +6,7 @@
     import { dismiss } from '$lib/dismiss';
     import Icon from '$lib/Icon.svelte';
     import SketchThumb from '$lib/SketchThumb.svelte';
+    import { MIN_SEARCH, searchNotes, snippetParts, type SearchHit } from '$lib/search';
     import { openNote, type Index } from '$lib/notes';
 
     let { index, settings }: { index: Index; settings: Snippet } = $props();
@@ -19,11 +20,52 @@
     const trash = $derived(page.url.searchParams.get('view') === 'trash');
     const active = $derived($notes.filter((n) => !n.deletedAt));
     const deleted = $derived($notes.filter((n) => n.deletedAt));
-    const visible = $derived(
-        (trash ? deleted : active).filter((n) =>
-            (n.title || 'New note').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
-        ),
-    );
+    // Titles match here, at once and offline; note text matches on the server.
+    let hits = $state<Map<string, SearchHit> | null>(null);
+    let textSearch = $state<'off' | 'done' | 'unavailable'>('off');
+    $effect(() => {
+        const q = query.trim();
+        if (q.length < MIN_SEARCH) {
+            hits = null;
+            textSearch = 'off';
+            return;
+        }
+        const controller = new AbortController();
+        const timer = setTimeout(() => {
+            searchNotes(q, controller.signal).then(
+                (found) => {
+                    hits = new Map(found.map((h) => [h.note, h]));
+                    textSearch = 'done';
+                },
+                () => {
+                    if (controller.signal.aborted) return;
+                    hits = null;
+                    textSearch = 'unavailable';
+                },
+            );
+        }, 150);
+        return () => {
+            clearTimeout(timer);
+            controller.abort();
+        };
+    });
+    /** Title matches first, then notes whose text matches, most relevant first. */
+    const visible = $derived.by(() => {
+        const pool = trash ? deleted : active;
+        const q = query.trim().toLocaleLowerCase();
+        if (!q) return pool;
+        const byTitle = pool.filter((n) => (n.title || 'New note').toLocaleLowerCase().includes(q));
+        if (!hits) return byTitle;
+        const titled = new Set(byTitle.map((n) => n.id));
+        const byId = new Map(pool.map((n) => [n.id, n]));
+        const byText = [...hits.keys()].flatMap((id) => (!titled.has(id) && byId.get(id)) || []);
+        return [...byTitle, ...byText];
+    });
+    /** Where a row opens: at the section its match is in, when searching. */
+    function href(id: string): string {
+        const section = query.trim() ? hits?.get(id)?.section : undefined;
+        return `${base}/n/${id}${trash ? '?view=trash' : ''}${section ? `#section-${section}` : ''}`;
+    }
 
     // On a narrow screen the list is hidden while a note is open; come back to the same place.
     let scroller: HTMLElement;
@@ -119,8 +161,11 @@
 </header>
 <div class="library-scroll" bind:this={scroller} onscroll={rememberPosition}>
     <div class="library-search">
-        <input type="search" bind:value={query} placeholder="Search titles" aria-label="Search note titles" />
+        <input type="search" bind:value={query} placeholder="Search" aria-label="Search notes" />
     </div>
+    {#if textSearch === 'unavailable'}<p class="library-hint muted small" role="status">
+            Searching titles only. Note text is searched when connected.
+        </p>{/if}
     {#if trash}<p class="library-hint muted small">
             Deleted notes stay here until you restore them. Automatic expiry is not enabled.
         </p>{/if}
@@ -134,7 +179,7 @@
                 <div class="note-row" class:selected={page.params.id === n.id}>
                     <a
                         onkeydown={navigateRows}
-                        href="{base}/n/{n.id}{trash ? '?view=trash' : ''}"
+                        href={href(n.id)}
                         aria-current={page.params.id === n.id ? 'page' : undefined}
                     >
                         <span class="note-text">
@@ -144,9 +189,17 @@
                                     ? ` · ${n.open} open`
                                     : ''}</span
                             >
-                            <span class="note-excerpt muted"
-                                >{n.preview.split('\n').join(' · ') || 'No additional text'}</span
-                            >
+                            {#if query.trim() && hits?.get(n.id)}
+                                <span class="note-excerpt muted"
+                                    >{#each snippetParts(hits.get(n.id)!.snippet) as part, i (i)}{#if part.match}<mark
+                                                >{part.text}</mark
+                                            >{:else}{part.text}{/if}{/each}</span
+                                >
+                            {:else}
+                                <span class="note-excerpt muted"
+                                    >{n.preview.split('\n').join(' · ') || 'No additional text'}</span
+                                >
+                            {/if}
                         </span>
                         {#if n.sketch}<SketchThumb bytes={n.sketch} />{/if}
                     </a>
@@ -162,7 +215,15 @@
                 </div>
             {:else}
                 <div class="library-empty">
-                    <p>{query ? 'No matching titles' : trash ? 'No deleted notes' : 'No notes on this device yet'}</p>
+                    <p>
+                        {query
+                            ? textSearch === 'done'
+                                ? 'No matching notes'
+                                : 'No matching titles'
+                            : trash
+                              ? 'No deleted notes'
+                              : 'No notes on this device yet'}
+                    </p>
                     {#if !trash && !query}<button class="btn primary" type="button" onclick={create}>New note</button
                         >{/if}
                     {#if !$synced}<p class="small muted">Connect to load notes from your other devices.</p>{/if}

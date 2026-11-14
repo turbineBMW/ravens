@@ -4,15 +4,16 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 14, 2026, at `9d5a82e`:
+As of November 14, 2026, at `5ded6e8`:
 
 | Phase | State |
 | --- | --- |
 | P0 Data safety | Done except purge tombstones and identity-scoped caches, deferred during alpha (see below). |
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
-| P5 Ink | **In progress**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3, P4, P6–P9 | Not started. |
+| P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
+| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface; folders are next. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
 
@@ -254,6 +255,16 @@ Phase 2's code is complete. Still open: the exit checks on hardware, meaning tou
 - Basic email/URL/phone detection; route reminder actions to Muninn without duplicating its task system.
 
 **Exit:** find a phrase deep in a long note, navigate directly to its section, move the note, and retain working links. Renaming tags updates saved filters predictably. Folder deletion has a clear recovery path. Exercise a representative 1,000-note library and measure search/list latency before setting release budgets.
+
+**Started November 14, 2026, with search, ahead of folders:** search only matched titles, and notes reach a device only when opened there, so a search of local content alone would miss most notes on a new device. Search therefore starts with the server projection, and the client falls back to titles offline.
+
+**First increment, PR #16:** the server mirrors each note's text into SQLite (`note_lines`, FTS5 over it, `unicode61` with diacritics removed) on every change, one row per line with the section it's under: the set title, then the body as `textLines` reads it, with every checklist item, checked or not, and tables cell by cell. Notes stored before this are indexed in the background at startup; `note_search_state` records which notes are indexed and by which version of the extraction, and a new version indexes everything again. `GET /v1/search?q=` finds the user's notes holding every word somewhere, the last word as a prefix, and returns each note's best line, preferring a line with every word, cut to the words around the match with the matches marked. The notes list's search box (*Search*) shows title matches at once, then notes whose text matches, most relevant first, with the matched line highlighted in place of the preview; a hit opens the note at its section, expanded, including in the note already open. Offline, or if the server can't search, it says it is matching titles only. No format change and nothing new in the documents.
+
+Measured with `cargo test -p huginn-server --release -- --ignored --nocapture` (1,000 notes of 40 lines, on the development machine): indexing all of them takes 2.2 s, re-indexing a changed note under 1 ms, and a search 14–27 ms, or up to 130 ms for a word in nearly every line of every note. Not yet measured on the mini.
+
+**Surface Pro 11, November 14, 2026, deployed to the mini:** passed. Startup indexed the mini's 3 existing notes.
+
+Still to do in this phase: folders, tags and Smart Folders, find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
 
 ### Phase 4 — Attachments, capture, and portability
 

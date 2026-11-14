@@ -25,6 +25,12 @@
     let { note, id }: { note: Note; id: string } = $props();
 
     let host: HTMLElement;
+
+    /** A link (from a reminder or a search) may name a section to open the note at. */
+    function revealLinkedSection() {
+        const target = decodeURIComponent(location.hash.slice(1));
+        if (editor && target.startsWith('section-')) revealSection(editor.view, target.slice('section-'.length));
+    }
     let editor = $state.raw<Editor | null>(null);
     // Toolbar state is read from the editor, so redraw it on every change.
     let revision = $state(0);
@@ -180,14 +186,15 @@
             onTransaction: () => revision++,
         });
         editor = created;
-        // A link from a reminder may name a section.
-        const target = decodeURIComponent(location.hash.slice(1));
-        if (target.startsWith('section-')) revealSection(created.view, target.slice('section-'.length));
+        revealLinkedSection();
+        // Following a link to another section of this note may only change the hash.
+        addEventListener('hashchange', revealLinkedSection);
         // Only a blank note takes focus: opening an existing one must not raise a phone's keyboard.
         if (created.isEmpty && !created.state.doc.firstChild?.type.name.startsWith('checklist')) {
             created.commands.focus('start');
         }
         return () => {
+            removeEventListener('hashchange', revealLinkedSection);
             created.destroy();
             undo.destroy();
             editor = null;
