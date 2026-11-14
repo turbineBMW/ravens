@@ -4,14 +4,14 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 10, 2026, at `5513158`:
+As of November 14, 2026, at `44bec77`:
 
 | Phase | State |
 | --- | --- |
 | P0 Data safety | Done except purge tombstones and identity-scoped caches, deferred during alpha (see below). |
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
-| P5 Ink | **In progress**, brought ahead of P3 and P4. Drawing with pen, mouse and eraser (format 4) passed on the Surface; the Fold is untested. Widths, highlighter and partial erasing are on the `huginn-ink-tools` branch; see [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
+| P5 Ink | **In progress**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), and the lasso, move/resize, ruler and paper (PR #14) passed on the Surface; the Fold is untested. Drawing thumbnails and ink in exports remain; see [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
 | P3, P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -280,13 +280,19 @@ Phase 2's code is complete. Still open: the exit checks on hardware, meaning tou
 
 The Fold has not yet been tested with a pen. Run `spikes/pen` on it before relying on the S Pen path.
 
-**First increment, on the `huginn-ink` branch:** the *Drawing* tool adds an `ink` block naming its own `strokes:<id>` map (format 4; `NOTE_FORMAT`, `CLIENT_VERSION` and Huginn's `min_client` are 4). The pen and the mouse draw, and pressure sets the width. Fingers scroll the note unless *Draw with finger* is on, a choice kept on each device. The pen's eraser end, or the *Eraser* tool, removes whole strokes. There are four colours that follow the theme, and undo covers strokes along with the rest of the note. A drawing is 1000 units wide and scales to the column, and it grows as you draw near its bottom edge. A stroke is stored when the pen lifts, so other devices see finished strokes, not strokes in progress. Plain text export shows `[Drawing]` in its place.
+**First increment, PR #12:** the *Drawing* tool adds an `ink` block naming its own `strokes:<id>` map (format 4; `NOTE_FORMAT`, `CLIENT_VERSION` and Huginn's `min_client` are 4). The pen and the mouse draw, and pressure sets the width. Fingers scroll the note unless *Draw with finger* is on, a choice kept on each device. The pen's eraser end, or the *Eraser* tool, removes whole strokes. There are four colours that follow the theme, and undo covers strokes along with the rest of the note. A drawing is 1000 units wide and scales to the column, and it grows as you draw near its bottom edge. A stroke is stored when the pen lifts, so other devices see finished strokes, not strokes in progress. Plain text export shows `[Drawing]` in its place.
 
 **Surface Pro 11, November 11, 2026, deployed to the mini:** passed. The pen draws without scrolling the note, the palm is fully rejected, the eraser end erases, a finger scrolls over a drawing, a second device shows the drawing, and no lag is noticeable.
 
-**Second increment, on the `huginn-ink-tools` branch:** pen and highlighter each have fine, medium and bold widths and their own colour, and yellow joins the palette. The highlighter draws one see-through path of even width. *Eraser* cuts away only what it touches, replacing a stroke with the pieces left, which keep its depth. *Stroke eraser* removes whole strokes, and the pen's eraser end does whichever was chosen last. An eraser gesture is stored as one change when it lifts. Tool choices are remembered on each device. The note format is unchanged: a format 4 client from before this draws a highlighter as an opaque pen stroke. Accepted limit: if two offline devices erase parts of the same stroke, the pieces from both survive, so part of one device's erasing comes back.
+**Second increment, PR #13:** pen and highlighter each have fine, medium and bold widths and their own colour, and yellow joins the palette. The highlighter draws one see-through path of even width. *Eraser* cuts away only what it touches, replacing a stroke with the pieces left, which keep its depth. *Stroke eraser* removes whole strokes, and the pen's eraser end does whichever was chosen last. An eraser gesture is stored as one change when it lifts. Tool choices are remembered on each device. The note format is unchanged: a format 4 client from before this draws a highlighter as an opaque pen stroke. Accepted limit: if two offline devices erase parts of the same stroke, the pieces from both survive, so part of one device's erasing comes back.
 
-Still to do in this phase: the same checks on the Fold with an S Pen (it has not been tested with a pen at all), lasso, move/resize, ruler, paper lines and grids, drawing thumbnails in the notes list, and ink in exports.
+**Surface Pro 11, November 14, 2026:** the second increment passed.
+
+**Third increment, PR #14:** *Lasso* selects the strokes at least half inside the loop it draws. Dragging the selection moves it, and its corner handle resizes it in proportion, widths included; it stays within the drawing's width and can't go above its top, and moving it down grows the drawing. *Delete selection* removes it. A move or resize is stored when the pointer lifts, sets each stroke's points and width in place so it keeps its id and depth, and is one undo step. *Ruler* shows a ruler on this device only. A finger or the mouse drags it, and two fingers or its end knobs turn it; it settles on multiples of 15° within 2° and shows its angle. A stroke from the pen or mouse that starts on the ruler, or within 40 units of an edge, draws straight along that edge, and the pen draws, erases and lassos straight through the ruler as if it weren't there. *Paper* (plain, lines, grid, dots) is kept for each drawing in the top-level `paper` map and scales with the drawing. The note format is unchanged: a format 4 client from before this shows moved strokes where they now are, and plain paper. Accepted limit: if one device moves a stroke while another erases it offline, the erase wins.
+
+**Surface Pro 11, November 14, 2026, deployed to the mini:** the third increment passed.
+
+Still to do in this phase: the same checks on the Fold with an S Pen (it has not been tested with a pen at all), drawing thumbnails in the notes list, and ink in exports.
 
 - Integrate the existing pen spike findings. Confirm actual Fold model and pen support using the spike; retain finger/mouse drawing when pen hardware is unavailable.
 - Stable stroke IDs and pressure-aware samples, rendering separate from storage, pen/highlighter/eraser, width/color, undo/redo, lasso selection, move/resize, ruler/straight lines, and paper lines/grids.

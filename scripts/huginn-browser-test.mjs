@@ -410,7 +410,83 @@ async function main() {
         return c.getContext('2d').getImageData(Math.round(${iw * 0.3} * ratio), Math.round(140 * ratio), 1, 1).data[3];
     })()`);
     assert.ok(highlightAlpha > 40 && highlightAlpha < 150, `the highlighter is see-through: alpha ${highlightAlpha}`);
+
+    // The lasso takes one stroke, which moves, comes back with undo, and is deleted and restored.
+    const inked = (x, y) =>
+        page.js(`(() => {
+            const c = document.querySelector('.note-ink canvas');
+            const ratio = c.width / c.getBoundingClientRect().width;
+            return c.getContext('2d').getImageData(Math.round(${x} * ratio), Math.round(${y} * ratio), 1, 1).data[3] > 0;
+        })()`);
+    const selected = `document.querySelector('.note-ink canvas').dataset.selected`;
+    await inkTool('Lasso');
+    [ix, iy, iw, ih] = await inkBox();
+    await page.stroke([
+        [ix + iw * 0.05, iy + 70],
+        [ix + iw * 0.55, iy + 70],
+        [ix + iw * 0.55, iy + 110],
+        [ix + iw * 0.05, iy + 110],
+        [ix + iw * 0.05, iy + 72],
+    ]);
+    await until(page.js, `${selected} === '1'`);
+    assert.ok(await inked(iw * 0.3, 90), 'the lassoed stroke is where it was drawn');
+    await sleep(500);
+    await page.drag([ix + iw * 0.3, iy + 90], [ix + iw * 0.3, iy + 250]);
+    await sleep(100);
+    assert.ok(!(await inked(iw * 0.3, 90)) && (await inked(iw * 0.3, 250)), 'dragging the selection moves it');
+    assert.equal(await page.js(inkStrokes), '3', 'a move adds and removes nothing');
+    await sleep(500);
+    await tool(page, 'Undo');
+    await sleep(100);
+    assert.ok((await inked(iw * 0.3, 90)) && !(await inked(iw * 0.3, 250)), 'undo puts it back');
+    await inkTool('Delete selection');
+    await until(page.js, `${inkStrokes} === '2'`);
+    await sleep(500);
+    await tool(page, 'Undo');
+    await until(page.js, `${inkStrokes} === '3'`);
+
+    // Paper is shared with the note's other devices.
+    await page.js(`(() => {
+        const paper = document.querySelector('.ink-tools select[aria-label="Paper"]');
+        paper.value = 'lines';
+        paper.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
+    await until(page.js, `document.querySelector('.ink-frame').classList.contains('paper-lines')`);
+
+    // A wobbly stroke started near the ruler's edge draws straight along it; the mouse moves the ruler.
     await inkTool('Pen');
+    await inkTool('Ruler');
+    await until(page.js, `document.querySelector('.ink-ruler')?.dataset.angle === '0'`);
+    [ix, iy, iw, ih] = await inkBox();
+    const rulerTop = () => page.js(`document.querySelector('.ink-ruler').getBoundingClientRect().top`);
+    const top = await rulerTop();
+    await page.stroke([0.6, 0.65, 0.7, 0.75, 0.8, 0.85].map((f, i) => [ix + iw * f, top - (i % 2 ? 22 : 6)]));
+    await until(page.js, `${inkStrokes} === '4'`);
+    const rows = await page.js(`(() => {
+        const c = document.querySelector('.note-ink canvas');
+        const ratio = c.width / c.getBoundingClientRect().width;
+        // The rows with any ink, across the stroke's span, which is clear of the earlier strokes.
+        const x = Math.round(${iw * 0.62} * ratio);
+        const w = Math.round(${iw * 0.21} * ratio);
+        const from = Math.round(${top - iy - 40} * ratio);
+        const h = Math.round(40 * ratio);
+        const data = c.getContext('2d').getImageData(x, from, w, h).data;
+        let n = 0;
+        for (let row = 0; row < h; row++) {
+            for (let col = 0; col < w; col++) {
+                if (data[(row * w + col) * 4 + 3]) {
+                    n++;
+                    break;
+                }
+            }
+        }
+        return n / ratio;
+    })()`);
+    assert.ok(rows > 0 && rows <= 6, `the stroke follows the ruler's edge: ${rows}px tall`);
+    await page.drag([ix + iw * 0.5, top + 10], [ix + iw * 0.5, top + 60]);
+    assert.ok(Math.abs((await rulerTop()) - top - 50) < 2, 'the mouse drags the ruler');
+    await inkTool('Ruler');
+    await until(page.js, `!document.querySelector('.ink-ruler')`);
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -428,7 +504,8 @@ async function main() {
     await until(other.js, `${bodyHtml}.includes('<table') && ${bodyHtml}.includes('First line of the note')`);
     await until(other.js, `document.querySelectorAll('.note-checklist').length === 2`);
     await until(other.js, `document.querySelectorAll('.tiptap h2[data-section]').length === 2`);
-    await until(other.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '3'`);
+    await until(other.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '4'`);
+    await until(other.js, `document.querySelector('.ink-frame').classList.contains('paper-lines')`);
     assert.deepEqual(
         await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
         sectionIds,
@@ -557,7 +634,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter and both erasers, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

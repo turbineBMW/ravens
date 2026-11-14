@@ -72,6 +72,62 @@ new Function(
     for (let x = 0; x <= 300; x += 5) sweep.push(x, 100);
     assert.deepEqual(eraseFrom(line, sweep), []);
 }
+{
+    // The lasso, moving and resizing.
+    const { boundsOf, inside, lassoed, moveWithin, resizeTo, transformed, MIN_SELECTION } = geometry.exports;
+    const square = [0, 0, 100, 0, 100, 100, 0, 100];
+    assert.ok(inside(square, 50, 50) && !inside(square, 150, 50) && !inside(square, 50, -1));
+    const across = { points: Float32Array.from([20, 50, 0.5, 0, 80, 50, 0.5, 10]), width: 4 };
+    const halfOut = { points: Float32Array.from([60, 50, 0.5, 0, 200, 50, 0.5, 10]), width: 4 };
+    const mostlyIn = { points: Float32Array.from([10, 50, 0.5, 0, 120, 50, 0.5, 10]), width: 4 };
+    assert.ok(lassoed(across, square), 'a stroke inside the loop is taken');
+    assert.ok(!lassoed(halfOut, square), 'one mostly outside is not');
+    assert.ok(lassoed(mostlyIn, square), 'one mostly inside is, though its samples are both near the edge');
+    assert.ok(!lassoed(across, [0, 0, 100, 100]), 'a line is not a loop');
+    assert.deepEqual(boundsOf([across, halfOut]), { left: 18, top: 48, right: 202, bottom: 52 });
+    assert.equal(boundsOf([]), null);
+    const box = { left: 100, top: 100, right: 300, bottom: 200 };
+    assert.deepEqual(moveWithin(box, 50, 20, 1000), { ox: 0, oy: 0, scale: 1, dx: 50, dy: 20 });
+    assert.equal(moveWithin(box, -500, 0, 1000).dx, -100, 'not off the left');
+    assert.equal(moveWithin(box, 900, 0, 1000).dx, 700, 'nor off the right');
+    assert.equal(moveWithin(box, 0, -500, 1000).dy, -100, 'nor above the top');
+    assert.equal(moveWithin(box, 0, 5000, 1000).dy, 5000, 'but as far down as you like: the drawing grows');
+    const bigger = resizeTo(box, 500, 300, 1000);
+    assert.equal(bigger.scale, 2, 'the corner follows the pointer along the diagonal');
+    assert.deepEqual([bigger.ox, bigger.oy], [100, 100], 'from the top-left corner');
+    assert.equal(resizeTo(box, 5000, 5000, 1000).scale, 900 / 200, 'no wider than the drawing');
+    assert.equal(resizeTo(box, 0, 0, 1000).scale, MIN_SELECTION / 200, 'nor too small to take hold of');
+    const grown = transformed(across, { ...bigger, dx: 10 });
+    // (20, 50) and (80, 50), doubled about (100, 100) and moved 10 right; pressure and time are kept.
+    assert.deepEqual([...grown.points], [-50, 0, 0.5, 0, 70, 0, 0.5, 10]);
+    assert.equal(grown.width, 8, 'the width scales with the stroke');
+    assert.deepEqual([...across.points], [20, 50, 0.5, 0, 80, 50, 0.5, 10], 'the original is untouched');
+}
+{
+    // The ruler.
+    const { RULER_LENGTH, RULER_THICKNESS, RULER_REACH, alongRuler, rulerDegrees, rulerSide, settleAngle } =
+        geometry.exports;
+    const level = { x: 500, y: 300, angle: 0 };
+    const edge = RULER_THICKNESS / 2;
+    assert.equal(rulerSide(level, 500, 300 - edge - 10), -1, 'near the top edge');
+    assert.equal(rulerSide(level, 500, 300 + edge + 10), 1, 'near the bottom edge');
+    assert.equal(rulerSide(level, 500, 305), 1, 'on the ruler: the nearer edge');
+    assert.equal(rulerSide(level, 500, 300 + edge + RULER_REACH + 1), 0, 'too far away');
+    assert.equal(rulerSide(level, 500 + RULER_LENGTH / 2 + 1, 300), 0, 'past its end');
+    const [x, y] = alongRuler(level, 1, 520, 360, 4);
+    assert.ok(Math.abs(x - 520) < 1e-9 && Math.abs(y - (300 + edge + 2)) < 1e-9, 'onto the edge, just clear of it');
+    const steep = { x: 0, y: 0, angle: Math.PI / 2 };
+    const [sx, sy] = alongRuler(steep, -1, 7, 50, 0);
+    assert.ok(Math.abs(sx - edge) < 1e-9 && Math.abs(sy - 50) < 1e-9, 'a turned ruler draws a turned line');
+    const degrees = (d) => (d * Math.PI) / 180;
+    assert.equal(settleAngle(degrees(44)), degrees(45), 'settles on 45 when close');
+    assert.equal(settleAngle(degrees(40)), degrees(40), 'but not when it is not');
+    assert.equal(settleAngle(degrees(-1)), 0);
+    assert.equal(rulerDegrees(degrees(-30)), 30, 'tilted either way reads the same');
+    assert.equal(rulerDegrees(degrees(150)), 30);
+    assert.equal(rulerDegrees(degrees(90)), 90);
+    assert.equal(rulerDegrees(degrees(180)), 0);
+}
 
 const index = openIndex();
 const id = index.create('checklist');
@@ -470,6 +526,52 @@ assert.deepEqual(
     afterErase.map((s) => [...s.points]).sort((a, b) => a[0] - b[0]),
     [[...pieceA], [...pieceB]],
 );
+// Moving or resizing keeps a stroke's id and depth, with new points and width.
+const [movable, doomed] = get(drawing.strokes);
+const moved = Float32Array.from(movable.points, (v, i) => (i % INK_STRIDE < 2 ? v + 100 : v));
+Y.applyUpdate(otherDevice, Y.encodeStateAsUpdate(sketch.doc.doc));
+drawing.reshape(
+    new Map([
+        [movable.id, { points: moved, width: movable.width * 2 }],
+        ['alreadygone000000000', { points: moved, width: 1 }],
+    ]),
+);
+const reshaped = get(drawing.strokes);
+assert.equal(reshaped.length, 2, 'a move adds nothing, even for a stroke that is gone');
+assert.deepEqual((({ id, created, width }) => ({ id, created, width }))(reshaped.find((s) => s.id === movable.id)), {
+    id: movable.id,
+    created: movable.created,
+    width: movable.width * 2,
+});
+assert.deepEqual([...reshaped.find((s) => s.id === movable.id).points], [...moved]);
+// Offline on both: the other device erases a stroke while this one moves it. The erase wins.
+otherDevice.getMap(strokesName).delete(doomed.id);
+drawing.reshape(new Map([[doomed.id, { points: moved, width: 3 }]]));
+Y.applyUpdate(sketch.doc.doc, Y.encodeStateAsUpdate(otherDevice));
+Y.applyUpdate(otherDevice, Y.encodeStateAsUpdate(sketch.doc.doc));
+assert.deepEqual(
+    get(drawing.strokes).map((s) => s.id),
+    [movable.id],
+    'a move does not bring back a stroke erased elsewhere',
+);
+assert.deepEqual(
+    [...decodePoints(otherDevice.getMap(strokesName).get(movable.id).get('points'))],
+    [...moved],
+    'the other device sees the move',
+);
+// Paper: plain until chosen, shared, and plain again for a paper this client doesn't know.
+assert.equal(get(drawing.paper), 'plain');
+drawing.setPaper('grid');
+assert.equal(get(drawing.paper), 'grid');
+Y.applyUpdate(otherDevice, Y.encodeStateAsUpdate(sketch.doc.doc));
+assert.equal(otherDevice.getMap('paper').get(strokesName), 'grid', 'paper syncs');
+otherDevice.getMap('paper').set(strokesName, 'parchment');
+Y.applyUpdate(sketch.doc.doc, Y.encodeStateAsUpdate(otherDevice));
+assert.equal(get(drawing.paper), 'plain');
+drawing.setPaper('plain');
+assert.ok(!sketch.paperMap.has(strokesName), 'plain paper takes no room');
+assert.equal(get(sketch.ink(sketch.newInk()).paper), 'plain', 'each drawing has its own paper');
+assert.equal(get(sketch.format), 4, 'moving and paper need no new format');
 assert.ok(sketch.plainText().includes('[Drawing]'), 'export marks where a drawing was');
 sketch.repairIndex();
 assert.equal(entry(sketchId).preview, '', 'a drawing adds nothing to the preview');
@@ -496,10 +598,12 @@ newer.newInk();
 assert.equal(newer.ink('strokes:refused').add({ tool: 'pen', color: 'ink', width: 4, points }), '');
 newer.ink('strokes:refused').erase(new Map([['anything', []]]));
 newer.ink('strokes:refused').remove(['anything']);
+newer.ink('strokes:refused').reshape(new Map([['anything', { points, width: 1 }]]));
+newer.ink('strokes:refused').setPaper('grid');
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();
