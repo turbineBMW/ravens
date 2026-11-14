@@ -19,14 +19,19 @@
  * map named by the block's `list` attribute.
  *
  * Format 4 adds drawings. An `ink` block names its own top-level `strokes:<id>`
- * map, of stroke id to Y.Map { tool, color, width, created, points }. A stroke
- * never changes once drawn: erasing deletes it, and erasing part of one replaces
- * it with the pieces left, which keep its `created` so they stay at its depth.
+ * map, of stroke id to Y.Map { tool, color, width, created, points }. Erasing
+ * deletes a stroke, and erasing part of one replaces it with the pieces left,
+ * which keep its `created` so they stay at its depth. Moving or resizing a
+ * stroke sets its `points` and `width` in place, so it keeps its id.
  * `tool` is `pen` or `highlighter`; clients that predate the highlighter draw it
  * as a pen. `points` is binary, four
  * little-endian float32s per sample (x, y, pressure, milliseconds since the
  * stroke began), with x and y in the block's own units, INK_WIDTH across, so a
  * drawing scales with the column instead of being cut off or distorted.
+ *
+ * A drawing's paper (lines, grid, dots) is in the top-level `paper` map, of
+ * strokes map name to paper name. Clients that predate it show plain paper, so
+ * neither needs a new format.
  */
 import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
@@ -89,6 +94,10 @@ export const INK_COLORS = ['ink', 'blue', 'red', 'green', 'yellow'] as const;
 export type InkColor = (typeof INK_COLORS)[number];
 export const INK_TOOLS = ['pen', 'highlighter'] as const;
 export type InkTool = (typeof INK_TOOLS)[number];
+export const PAPERS = ['plain', 'lines', 'grid', 'dots'] as const;
+export type Paper = (typeof PAPERS)[number];
+/** Each drawing's paper, by the name of its strokes map. */
+const PAPER_MAP = 'paper';
 
 export interface Stroke {
     id: string;
@@ -145,6 +154,10 @@ export interface InkModel {
     /** Store a finished stroke; returns its id. */
     add(stroke: Pick<Stroke, 'tool' | 'color' | 'width' | 'points'>): string;
     remove(ids: string[]): void;
+    /** Moved or resized strokes: each keeps its id, with new points and width. Strokes already gone stay gone. */
+    reshape(changes: Map<string, Pick<Stroke, 'points' | 'width'>>): void;
+    paper: Readable<Paper>;
+    setPaper(paper: Paper): void;
     /**
      * One eraser gesture: each stroke named is replaced by the pieces left of it,
      * none when it was erased entirely. Strokes already gone are left gone.
@@ -362,6 +375,8 @@ export interface Note extends ChecklistModel {
     ink(name: string): InkModel;
     /** The shared map behind a drawing, for undo. */
     inkMap(name: string): Y.Map<unknown>;
+    /** The shared map of every drawing's paper, for undo. */
+    paperMap: Y.Map<string>;
     /** Prepare a new drawing for a block to point at; returns its name. */
     newInk(): string;
     /** Check off nothing and everything: these two cover every checklist in the note. */
@@ -556,6 +571,7 @@ export function openNote(id: string, index?: Index): Note {
         return model;
     };
     const drawings = new Map<string, InkModel>();
+    const papers = doc.doc.getMap<string>(PAPER_MAP);
     const ink = (name: string): InkModel => {
         const cached = drawings.get(name);
         if (cached) return cached;
@@ -591,6 +607,28 @@ export function openNote(id: string, index?: Index): Note {
                 doc.doc.transact(() => {
                     for (const sid of ids) map.delete(sid);
                 });
+                touched();
+            },
+            reshape(changes) {
+                if (isTooNew() || !changes.size) return;
+                doc.doc.transact(() => {
+                    for (const [sid, { points, width }] of changes) {
+                        const stroke = map.get(sid);
+                        if (!stroke) continue;
+                        stroke.set('points', encodePoints(points));
+                        stroke.set('width', width);
+                    }
+                });
+                touched();
+            },
+            paper: yStore(papers, () => {
+                const paper = papers.get(name) as Paper;
+                return PAPERS.includes(paper) ? paper : 'plain';
+            }),
+            setPaper(paper) {
+                if (isTooNew()) return;
+                if (paper === 'plain') papers.delete(name);
+                else papers.set(name, paper);
                 touched();
             },
         };
@@ -668,6 +706,7 @@ export function openNote(id: string, index?: Index): Note {
         },
         ink,
         inkMap: (name) => doc.doc.getMap(name),
+        paperMap: papers,
         newInk() {
             if (!isTooNew()) needFormat(INK_FORMAT);
             return `strokes:${newId()}`;

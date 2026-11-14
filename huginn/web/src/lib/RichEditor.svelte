@@ -151,7 +151,7 @@
                 () =>
                 ({ node }) => {
                     const name = String(node.attrs.strokes);
-                    undo.addToScope(note.inkMap(name));
+                    undo.addToScope([note.inkMap(name), note.paperMap]);
                     const dom = document.createElement('div');
                     dom.className = 'note-ink';
                     dom.contentEditable = 'false';

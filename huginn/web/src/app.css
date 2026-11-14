@@ -518,7 +518,8 @@
     gap: 4px;
     margin-bottom: 4px;
 }
-.ink-tools button {
+.ink-tools button,
+.ink-tools select {
     min-height: 32px;
     padding: 0 10px;
     border: 1px solid var(--line);
@@ -602,6 +603,79 @@
 }
 .ink-canvas.erasing {
     cursor: cell;
+}
+.ink-canvas.lasso {
+    cursor: default;
+}
+.ink-canvas.moving {
+    cursor: move;
+}
+.ink-canvas.resizing {
+    cursor: nwse-resize;
+}
+/* Paper scales with the drawing, like its strokes. */
+.ink-frame.paper-lines {
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0 calc(var(--paper-step) - 1px),
+        var(--line) calc(var(--paper-step) - 1px) var(--paper-step)
+    );
+}
+.ink-frame.paper-grid {
+    background-image:
+        repeating-linear-gradient(
+            to bottom,
+            transparent 0 calc(var(--paper-step) - 1px),
+            var(--line) calc(var(--paper-step) - 1px) var(--paper-step)
+        ),
+        repeating-linear-gradient(
+            to right,
+            transparent 0 calc(var(--paper-step) - 1px),
+            var(--line) calc(var(--paper-step) - 1px) var(--paper-step)
+        );
+}
+.ink-frame.paper-dots {
+    background-image: radial-gradient(circle, var(--muted) 1.25px, transparent 1.75px);
+    background-size: var(--paper-step) var(--paper-step);
+    background-position: calc(var(--paper-step) / -2) calc(var(--paper-step) / -2);
+}
+/* The ruler: fingers and the mouse move and turn it, the pen draws along it. */
+.ink-ruler {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-sizing: border-box;
+    border: 1px solid var(--muted);
+    border-radius: 4px;
+    background:
+        repeating-linear-gradient(to right, var(--muted) 0 1px, transparent 1px var(--tick)) top left / 100% 18%
+            no-repeat,
+        repeating-linear-gradient(to right, var(--muted) 0 1px, transparent 1px var(--tick)) bottom left / 100% 18%
+            no-repeat,
+        color-mix(in srgb, var(--panel) 75%, transparent);
+    color: var(--text);
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+}
+.ink-ruler:active {
+    cursor: grabbing;
+}
+.ink-ruler-angle {
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+}
+.ink-ruler-end {
+    width: 26px;
+    height: 26px;
+    margin: 0 6px;
+    flex: none;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: var(--panel);
+    cursor: alias;
 }
 .ink-hint {
     position: absolute;
