@@ -5,6 +5,7 @@
     import { page } from '$app/state';
     import { dismiss } from '$lib/dismiss';
     import Icon from '$lib/Icon.svelte';
+    import SketchThumb from '$lib/SketchThumb.svelte';
     import { openNote, type Index } from '$lib/notes';
 
     let { index, settings }: { index: Index; settings: Snippet } = $props();
@@ -136,15 +137,18 @@
                         href="{base}/n/{n.id}{trash ? '?view=trash' : ''}"
                         aria-current={page.params.id === n.id ? 'page' : undefined}
                     >
-                        <strong>{n.title || 'New note'}</strong>
-                        <span class="small muted"
-                            >{n.pinned && !trash ? 'Pinned · ' : ''}{when(trash ? n.deletedAt : n.updated)}{n.open
-                                ? ` · ${n.open} open`
-                                : ''}</span
-                        >
-                        <span class="note-excerpt muted"
-                            >{n.preview.split('\n').join(' · ') || 'No additional text'}</span
-                        >
+                        <span class="note-text">
+                            <strong>{n.title || 'New note'}</strong>
+                            <span class="small muted"
+                                >{n.pinned && !trash ? 'Pinned · ' : ''}{when(trash ? n.deletedAt : n.updated)}{n.open
+                                    ? ` · ${n.open} open`
+                                    : ''}</span
+                            >
+                            <span class="note-excerpt muted"
+                                >{n.preview.split('\n').join(' · ') || 'No additional text'}</span
+                            >
+                        </span>
+                        {#if n.sketch}<SketchThumb bytes={n.sketch} />{/if}
                     </a>
                     {#if !trash}
                         <button

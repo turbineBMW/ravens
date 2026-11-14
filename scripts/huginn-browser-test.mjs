@@ -487,6 +487,10 @@ async function main() {
     assert.ok(Math.abs((await rulerTop()) - top - 50) < 2, 'the mouse drags the ruler');
     await inkTool('Ruler');
     await until(page.js, `!document.querySelector('.ink-ruler')`);
+
+    // The notes list shows the drawing as a thumbnail, one path per stroke.
+    const thumbPaths = `document.querySelectorAll('.note-row.selected svg.sketch path').length`;
+    await until(page.js, `${thumbPaths} === 4`);
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -506,6 +510,7 @@ async function main() {
     await until(other.js, `document.querySelectorAll('.tiptap h2[data-section]').length === 2`);
     await until(other.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '4'`);
     await until(other.js, `document.querySelector('.ink-frame').classList.contains('paper-lines')`);
+    await until(other.js, `document.querySelectorAll('.note-row.selected svg.sketch path').length === 4`);
     assert.deepEqual(
         await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
         sectionIds,
@@ -634,7 +639,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

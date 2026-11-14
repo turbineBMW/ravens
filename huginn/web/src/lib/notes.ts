@@ -2,8 +2,11 @@
  * Huginn's data, as Yjs documents (see @ravens/ui/sync).
  *
  * `index`: one document per user listing their notes: a Y.Map of note id to
- * a Y.Map { title, kind, created, updated, pinned }. Titles are mirrored
- * here so the notes page renders offline without opening every note.
+ * a Y.Map { title, kind, created, updated, pinned, preview, open, done,
+ * sketch }. Titles are mirrored here so the notes page renders offline without
+ * opening every note. `sketch`, when there is one, is a small copy of the
+ * note's first drawing for its thumbnail (see encodeSketch); clients that
+ * predate it ignore it.
  *
  * `note:<id>`: one document per note. `meta` holds { title }; `items` is a
  * Y.Map of item id to Y.Map { text, checked, checkedAt, pos }. Each item is
@@ -70,6 +73,8 @@ export interface NoteMeta {
     preview: string;
     open: number;
     done: number;
+    /** The note's first drawing, for its thumbnail (see encodeSketch), or null. */
+    sketch: Uint8Array | null;
 }
 
 export interface Item {
@@ -80,7 +85,7 @@ export interface Item {
     pos: string;
 }
 
-type YNoteMeta = Y.Map<string | number | boolean>;
+type YNoteMeta = Y.Map<string | number | boolean | Uint8Array>;
 type YItem = Y.Map<string | number | boolean>;
 type YStroke = Y.Map<string | number | Uint8Array>;
 
@@ -165,6 +170,122 @@ export interface InkModel {
     erase(changes: Map<string, Float32Array[]>): void;
 }
 
+// ---------- sketches: a drawing's thumbnail, kept in the index ----------
+
+const SKETCH_VERSION = 1;
+/** A sketch's longer side, in its own units: one byte per coordinate. */
+export const SKETCH_SIZE = 255;
+/** A busy drawing is simplified harder until it fits, then cut short. */
+export const SKETCH_MAX_BYTES = 3000;
+
+export interface Sketch {
+    width: number;
+    height: number;
+    strokes: { tool: InkTool; color: InkColor; width: number; points: number[] }[];
+}
+
+/** Douglas-Peucker on x, y pairs: the fewest points that stay within `tolerance` of the line. */
+function simplify(points: number[], tolerance: number): number[] {
+    const n = points.length / 2;
+    if (n <= 2) return points;
+    const keep = new Uint8Array(n);
+    keep[0] = keep[n - 1] = 1;
+    const spans: [number, number][] = [[0, n - 1]];
+    while (spans.length) {
+        const [a, b] = spans.pop()!;
+        const [ax, ay, bx, by] = [points[a * 2], points[a * 2 + 1], points[b * 2], points[b * 2 + 1]];
+        const length = Math.hypot(bx - ax, by - ay);
+        let far = -1;
+        let farthest = tolerance;
+        for (let i = a + 1; i < b; i++) {
+            const [px, py] = [points[i * 2], points[i * 2 + 1]];
+            const d = length
+                ? Math.abs((bx - ax) * (ay - py) - (ax - px) * (by - ay)) / length
+                : Math.hypot(px - ax, py - ay);
+            if (d > farthest) [far, farthest] = [i, d];
+        }
+        if (far >= 0) {
+            keep[far] = 1;
+            spans.push([a, far], [far, b]);
+        }
+    }
+    return points.filter((_, i) => keep[i >> 1]);
+}
+
+/**
+ * A small copy of a drawing for its thumbnail, cropped to its ink:
+ * [version, width, height], then for each stroke [tool << 4 | colour,
+ * width, count (2 bytes, little-endian)] and count x, y byte pairs. The
+ * longer side is SKETCH_SIZE. Null for a drawing with no strokes.
+ */
+export function encodeSketch(strokes: Stroke[]): Uint8Array | null {
+    let [left, top, right, bottom] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const s of strokes) {
+        for (let i = 0; i < s.points.length; i += INK_STRIDE) {
+            left = Math.min(left, s.points[i] - s.width / 2);
+            right = Math.max(right, s.points[i] + s.width / 2);
+            top = Math.min(top, s.points[i + 1] - s.width / 2);
+            bottom = Math.max(bottom, s.points[i + 1] + s.width / 2);
+        }
+    }
+    if (left === Infinity) return null;
+    const q = SKETCH_SIZE / Math.max(right - left, bottom - top, 1);
+    const byte = (v: number) => Math.max(0, Math.min(SKETCH_SIZE, Math.round(v)));
+    const tolerances = [1, 2, 4, 8];
+    for (const tolerance of tolerances) {
+        const out = [SKETCH_VERSION, byte((right - left) * q), byte((bottom - top) * q)];
+        let fits = true;
+        for (const s of strokes) {
+            const pairs: number[] = [];
+            for (let i = 0; i < s.points.length; i += INK_STRIDE) {
+                const x = byte((s.points[i] - left) * q);
+                const y = byte((s.points[i + 1] - top) * q);
+                if (pairs.length && x === pairs[pairs.length - 2] && y === pairs[pairs.length - 1]) continue;
+                pairs.push(x, y);
+            }
+            if (!pairs.length) continue;
+            const points = simplify(pairs, tolerance);
+            const n = points.length / 2;
+            const head = [
+                (INK_TOOLS.indexOf(s.tool) << 4) | INK_COLORS.indexOf(s.color),
+                Math.min(255, Math.max(1, Math.round(s.width * q))),
+                n & 255,
+                n >> 8,
+            ];
+            if (out.length + head.length + points.length > SKETCH_MAX_BYTES) {
+                fits = false;
+                break;
+            }
+            out.push(...head, ...points);
+        }
+        // The last try keeps the strokes that fit, oldest first.
+        if (fits || tolerance === tolerances[tolerances.length - 1]) return Uint8Array.from(out);
+    }
+    return null;
+}
+
+/** A sketch from the index, or null for one this client can't read. */
+export function decodeSketch(bytes: Uint8Array): Sketch | null {
+    if (bytes.length < 3 || bytes[0] !== SKETCH_VERSION) return null;
+    const sketch: Sketch = { width: bytes[1], height: bytes[2], strokes: [] };
+    let at = 3;
+    while (at + 4 <= bytes.length) {
+        const n = bytes[at + 2] | (bytes[at + 3] << 8);
+        if (at + 4 + n * 2 > bytes.length) break;
+        sketch.strokes.push({
+            tool: INK_TOOLS[bytes[at] >> 4] ?? 'pen',
+            color: INK_COLORS[bytes[at] & 15] ?? 'ink',
+            width: bytes[at + 1],
+            points: [...bytes.subarray(at + 4, at + 4 + n * 2)],
+        });
+        at += 4 + n * 2;
+    }
+    return sketch;
+}
+
+const sameBytes = (a: Uint8Array | null, b: Uint8Array | null) =>
+    a === b || (!!a && !!b && a.length === b.length && a.every((v, i) => v === b[i]));
+
 // ---------- the migration ----------
 
 function fnv1a(text: string): number {
@@ -245,9 +366,12 @@ export interface Index {
     notes: Readable<NoteMeta[]>;
     create(kind: NoteKind): string;
     kindOf(id: string): NoteKind | undefined;
-    touch(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done'>>): void;
+    touch(
+        id: string,
+        patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done' | 'sketch'>>,
+    ): void;
     /** Correct the mirrored fields from the note itself, without counting as an edit. */
-    repair(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'preview' | 'open' | 'done'>>): void;
+    repair(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'preview' | 'open' | 'done' | 'sketch'>>): void;
     remove(id: string): void;
     restore(id: string): void;
     release(): void;
@@ -265,7 +389,17 @@ function readMeta(id: string, m: YNoteMeta): NoteMeta {
         preview: String(m.get('preview') ?? ''),
         open: Number(m.get('open') ?? 0),
         done: Number(m.get('done') ?? 0),
+        sketch: m.get('sketch') instanceof Uint8Array ? (m.get('sketch') as Uint8Array) : null,
     };
+}
+
+/** Write a sketch only when it changed; none clears it. */
+function setSketch(m: YNoteMeta, sketch: Uint8Array | null | undefined) {
+    if (sketch === undefined) return;
+    const now = m.get('sketch');
+    if (sameBytes(now instanceof Uint8Array ? now : null, sketch)) return;
+    if (sketch) m.set('sketch', sketch);
+    else m.delete('sketch');
 }
 
 export function openIndex(): Index {
@@ -284,7 +418,7 @@ export function openIndex(): Index {
             const id = newId();
             const now = Date.now();
             doc.doc.transact(() => {
-                const m = new Y.Map<string | number | boolean>();
+                const m: YNoteMeta = new Y.Map();
                 m.set('title', '');
                 m.set('kind', kind);
                 m.set('created', now);
@@ -305,6 +439,7 @@ export function openIndex(): Index {
                 for (const k of ['title', 'pinned', 'preview', 'open', 'done'] as const) {
                     if (patch[k] !== undefined) m.set(k, patch[k]);
                 }
+                setSketch(m, patch.sketch);
                 m.set('updated', Date.now());
             });
         },
@@ -316,6 +451,7 @@ export function openIndex(): Index {
                     const value = patch[k];
                     if (value !== undefined && value !== readMeta(id, m)[k]) m.set(k, value);
                 }
+                setSketch(m, patch.sketch);
             });
         },
         remove(id) {
@@ -447,6 +583,19 @@ export function openNote(id: string, index?: Index): Note {
         return lines.map((line) => line.trim()).filter(Boolean);
     };
 
+    /** The note's first drawing with anything in it, for its thumbnail. */
+    const firstSketch = () => {
+        for (const block of blocks()) {
+            if (block.nodeName !== 'ink') continue;
+            const map = doc.doc.getMap<YStroke>(block.getAttribute('strokes') || 'strokes');
+            if (!map.size) continue;
+            const all: Stroke[] = [];
+            map.forEach((m, sid) => all.push(readStroke(sid, m)));
+            return encodeSketch(all.sort((a, b) => a.created - b.created || a.id.localeCompare(b.id)));
+        }
+        return null;
+    };
+
     /** What the index shows of this note. */
     const summary = () => {
         const explicit = String(meta.get('title') ?? '').trim();
@@ -459,6 +608,7 @@ export function openNote(id: string, index?: Index): Note {
             preview: (explicit ? lines : lines.slice(1)).slice(0, 4).join('\n'),
             open,
             done: all.length - open,
+            sketch: meta.has('format') ? firstSketch() : null,
         };
     };
 

@@ -757,12 +757,28 @@ main.workspace {
     display: flex;
     flex: 1;
     min-width: 0;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 10px;
     padding: 10px 4px 10px 12px;
     border-radius: var(--radius);
     text-decoration: none;
     color: inherit;
+}
+.note-text {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+/* A note's first drawing; SketchThumb's SIDE_PX matches the size. */
+.note-row .sketch {
+    flex: none;
+    width: 48px;
+    height: 48px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
 }
 .note-row strong,
 .note-excerpt {

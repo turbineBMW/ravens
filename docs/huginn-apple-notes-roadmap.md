@@ -4,14 +4,14 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 14, 2026, at `44bec77`:
+As of November 14, 2026, at `9d5a82e`:
 
 | Phase | State |
 | --- | --- |
 | P0 Data safety | Done except purge tombstones and identity-scoped caches, deferred during alpha (see below). |
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
-| P5 Ink | **In progress**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), and the lasso, move/resize, ruler and paper (PR #14) passed on the Surface; the Fold is untested. Drawing thumbnails and ink in exports remain; see [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
+| P5 Ink | **In progress**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
 | P3, P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -292,7 +292,11 @@ The Fold has not yet been tested with a pen. Run `spikes/pen` on it before relyi
 
 **Surface Pro 11, November 14, 2026, deployed to the mini:** the third increment passed.
 
-Still to do in this phase: the same checks on the Fold with an S Pen (it has not been tested with a pen at all), drawing thumbnails in the notes list, and ink in exports.
+**Fourth increment, PR #15:** a note with a drawing shows its first drawing as a thumbnail at the right of its row in the notes list. The index entry keeps a `sketch` of it, so the list draws it without opening the note: cropped to the ink, its longer side 255 units with one byte per coordinate, each stroke simplified (Douglas-Peucker) and stored with its tool, colour and width. A busy drawing is simplified harder until it fits in 3000 bytes, then keeps its oldest strokes that fit. The device that edits the drawing writes the sketch, only when it changed; opening a note repairs a missing or stale one, so drawings made before this get theirs when next opened. The thumbnail is SVG in the theme's colours, with no line thinner than 1.25 px. The note format is unchanged; older clients ignore `sketch`.
+
+**Surface Pro 11, November 14, 2026, deployed to the mini:** the fourth increment passed.
+
+Still to do in this phase: the same checks on the Fold with an S Pen (it has not been tested with a pen at all), and ink in exports.
 
 - Integrate the existing pen spike findings. Confirm actual Fold model and pen support using the spike; retain finger/mouse drawing when pen hardware is unavailable.
 - Stable stroke IDs and pressure-aware samples, rendering separate from storage, pen/highlighter/eraser, width/color, undo/redo, lasso selection, move/resize, ruler/straight lines, and paper lines/grids.
