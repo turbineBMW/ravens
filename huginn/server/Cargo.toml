@@ -14,3 +14,7 @@ raven-core = { workspace = true }
 raven-server = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+yrs = "0.28"

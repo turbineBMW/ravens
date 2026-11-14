@@ -141,5 +141,5 @@ criteria for each phase.
 4. Deployed to the Mac mini behind `tailscale serve` (2026-11-01).
 5. Muninn lists, due dates, flags, subtasks, smart views; then notifications and the link.
 6. Huginn rich text (roadmap Phase 2, PRs #8–#10).
-7. Huginn ink (roadmap Phase 5). **← here**
-8. Huginn organization and search, then attachments and export (roadmap Phases 3 and 4).
+7. Huginn ink (roadmap Phase 5, PRs #12–#15).
+8. Huginn organization and search, then attachments and export (roadmap Phases 3 and 4). **← here**

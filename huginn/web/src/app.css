@@ -792,6 +792,11 @@ main.workspace {
 .note-excerpt {
     font-size: 0.9rem;
 }
+.note-excerpt mark {
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--text);
+}
 .pin-button {
     align-self: center;
     min-width: var(--tap);

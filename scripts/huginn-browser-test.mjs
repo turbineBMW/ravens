@@ -199,6 +199,13 @@ const tool = (page, label) => page.js(`document.querySelector('.editor-toolbar [
 const bodyHtml = `document.querySelector('.tiptap').innerHTML`;
 const rowTitle = `document.querySelector('.note-row.selected strong')?.textContent`;
 const overflows = (page) => page.js('document.documentElement.scrollWidth > innerWidth');
+const searchFor = (page, text) =>
+    page.js(`(() => {
+        const box = document.querySelector('.library-search input');
+        box.value = ${JSON.stringify(text)};
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+const marks = `[...document.querySelectorAll('.note-row .note-excerpt mark')].map((m) => m.textContent).join(' ')`;
 
 async function main() {
     startServer();
@@ -491,9 +498,32 @@ async function main() {
     // The notes list shows the drawing as a thumbnail, one path per stroke.
     const thumbPaths = `document.querySelectorAll('.note-row.selected svg.sketch path').length`;
     await until(page.js, `${thumbPaths} === 4`);
+
+    // Search finds text in the note's body, highlights it, and opens the note
+    // at its section, expanding it; then collapses it again for the checks below.
+    const hidden = (text) =>
+        `[...document.querySelectorAll('.tiptap p')].find((p) => p.textContent === ${JSON.stringify(text)})?.classList.contains('section-hidden')`;
+    await until(page.js, hidden('Under plans'));
+    await searchFor(page, 'under pla');
+    await until(page.js, `${marks} === 'Under plans'`);
+    const hitHref = await page.js(`document.querySelector('.note-row a').getAttribute('href')`);
+    assert.ok(hitHref.endsWith(`#section-${sectionIds[0]}`), `a hit opens its section: ${hitHref}`);
+    await page.js(`document.querySelector('.note-row a').click()`);
+    await until(page.js, `${hidden('Under plans')} === false`);
+    await searchFor(page, 'under zebra');
+    await until(page.js, `document.querySelector('.library-empty')?.textContent.includes('No matching notes')`);
+    await searchFor(page, '');
+    await page.js(`document.querySelector('.tiptap h2 .section-toggle').click()`);
+    await until(page.js, hidden('Under plans'));
+
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
+    // Offline, search says it's matching titles only.
+    await searchFor(page, 'groceries');
+    await until(page.js, `document.querySelector('.library-hint[role=status]')?.textContent.includes('titles only')`);
+    assert.equal(await page.js(`document.querySelectorAll('.note-row').length`), 1, 'titles still match');
+    await searchFor(page, '');
     await setTitle(page, 'Groceries, edited offline');
     await until(page.js, subtitleIs('Offline · changes waiting to sync'));
     startServer();
@@ -542,6 +572,14 @@ async function main() {
             code === 0 ? resolve(out.trim().split('\n').pop()) : reject(Error('seeding failed')),
         );
     });
+    // Search covers notes this device has never opened: the seventh item is in no preview.
+    await searchFor(other, 'towels');
+    await until(other.js, `${marks} === 'towels'`);
+    assert.ok(
+        (await other.js(`document.querySelector('.note-row a').getAttribute('href')`)).includes(seeded),
+        'the note found is the one never opened here',
+    );
+    await searchFor(other, '');
     for (const reader of [page, other]) {
         await reader.go(`${BASE}n/${seeded}`);
         await until(reader.js, `document.querySelectorAll('.note-checklist').length === 1`);
@@ -639,7 +677,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 
