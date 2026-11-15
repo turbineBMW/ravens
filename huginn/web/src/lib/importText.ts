@@ -16,7 +16,13 @@ import { addFile } from '$lib/files';
 import { openNote, type Index } from '$lib/notes';
 import { describe } from '$lib/thumbs';
 
-type PMNode = { type: string; attrs?: Record<string, unknown>; content?: PMNode[]; text?: string; marks?: PMMark[] };
+export type PMNode = {
+    type: string;
+    attrs?: Record<string, unknown>;
+    content?: PMNode[];
+    text?: string;
+    marks?: PMMark[];
+};
 type PMMark = { type: string; attrs?: Record<string, unknown> };
 
 /** The editor's schema, enough to write what an import makes. */
@@ -166,7 +172,8 @@ async function attach(path: string, alt: string, c: Converting): Promise<PMNode 
                 height: made.height,
                 pages: made.pages,
                 thumb,
-                alt,
+                // An export writes the file name where there's no description: that's no description.
+                alt: alt === name ? '' : alt,
             },
         };
     } catch {
@@ -175,7 +182,7 @@ async function attach(path: string, alt: string, c: Converting): Promise<PMNode 
     }
 }
 
-const paragraph = (content: PMNode[]): PMNode => ({ type: 'paragraph', ...(content.length ? { content } : {}) });
+export const paragraph = (content: PMNode[]): PMNode => ({ type: 'paragraph', ...(content.length ? { content } : {}) });
 
 async function blocks(tokens: Token[], c: Converting): Promise<PMNode[]> {
     const out: PMNode[] = [];
@@ -317,13 +324,27 @@ export async function importText(
     let content = markdown ? await blocks(marked.lexer(text, { gfm: true }), c) : plainBlocks(text);
     if (!content.length) content = [paragraph([])];
 
+    await createNote(index, content, folder, c.lists);
+    return { lost: [...c.lost] };
+}
+
+/**
+ * A new note holding `content` (the editor's JSON), in `folder`; its id.
+ * A checklist block whose `list` is `pending:<n>` gets a list of its own,
+ * holding `lists[n]`. Resolves once the note is written on this device.
+ */
+export async function createNote(
+    index: Index,
+    content: PMNode[],
+    folder = '',
+    lists: { text: string; checked: boolean }[][] = [],
+): Promise<string> {
     const id = index.create('text', folder);
     const note = openNote(id, index);
     try {
         await note.doc.whenLocal;
         note.initialise();
-        // Each checklist block gets its own list, filled in.
-        const names = c.lists.map(() => note.newList());
+        const names = lists.map(() => note.newList());
         content = content.map((n) =>
             n.type === 'checklist' && String(n.attrs?.list).startsWith('pending:')
                 ? { ...n, attrs: { list: names[Number(String(n.attrs!.list).slice('pending:'.length))] } }
@@ -331,9 +352,13 @@ export async function importText(
         );
         if (content.some((n) => n.type === 'attachment')) note.allowAttachments();
         note.doc.doc.transact(() => {
-            prosemirrorJSONToYXmlFragment(editorSchema(), { type: 'doc', content: tidy(content) }, note.body);
+            prosemirrorJSONToYXmlFragment(
+                editorSchema(),
+                { type: 'doc', content: tidy(content.length ? content : [paragraph([])]) },
+                note.body,
+            );
         });
-        c.lists.forEach((items, i) => {
+        lists.forEach((items, i) => {
             const list = note.list(names[i]);
             let after: string | null = null;
             for (const item of items) {
@@ -345,5 +370,5 @@ export async function importText(
     } finally {
         note.release();
     }
-    return { lost: [...c.lost] };
+    return id;
 }

@@ -34,6 +34,11 @@ sw.addEventListener('fetch', (event) => {
     const request = event.request;
     const url = new URL(request.url);
     const scope = new URL(sw.registration.scope);
+    // Shared from another app (the manifest's share_target): kept for the capture page, which takes it.
+    if (request.method === 'POST' && url.origin === scope.origin && url.pathname === `${scope.pathname}share`) {
+        event.respondWith(keepShared(request, scope));
+        return;
+    }
     if (request.method !== 'GET' || url.origin !== scope.origin || !url.pathname.startsWith(scope.pathname)) return;
     // Never cache identities, API responses, or sync endpoints.
     if (url.pathname.startsWith(`${scope.pathname}v1/`)) return;
@@ -47,3 +52,29 @@ sw.addEventListener('fetch', (event) => {
         );
     }
 });
+
+async function keepShared(request: Request, scope: URL): Promise<Response> {
+    const key = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const at = (path: string) => new URL(`share/${key}/${path}`, scope).href;
+    try {
+        const form = await request.formData();
+        const files = form.getAll('files').filter((f): f is File => f instanceof File && f.size > 0);
+        const cache = await caches.open('huginn-share');
+        for (const [i, f] of files.entries()) await cache.put(at(`file/${i}`), new Response(f));
+        const field = (name: string) => String(form.get(name) ?? '');
+        await cache.put(
+            at('data'),
+            new Response(
+                JSON.stringify({
+                    title: field('title'),
+                    text: field('text'),
+                    url: field('url'),
+                    files: files.map((f) => ({ name: f.name, type: f.type })),
+                }),
+            ),
+        );
+        return Response.redirect(new URL(`capture?share=${key}`, scope).href, 303);
+    } catch {
+        return Response.redirect(new URL('capture', scope).href, 303);
+    }
+}

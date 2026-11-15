@@ -713,6 +713,37 @@
 .note-row .picture {
     object-fit: cover;
 }
+/* Quick capture. */
+.capture {
+    display: grid;
+    gap: 10px;
+    width: min(640px, 100%);
+    padding: 16px;
+}
+.capture textarea,
+.capture .capture-link {
+    width: 100%;
+    font: inherit;
+}
+.capture-files {
+    display: grid;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.capture-files li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.capture-files li span:first-child {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 /* What an export or import did. */
 .report {
     width: min(440px, 100vw - 16px);

@@ -76,7 +76,11 @@
     });
 </script>
 
-<main style:--list-width={`${listWidth}px`} class="workspace" class:has-selection={!!page.params.id}>
+<main
+    style:--list-width={`${listWidth}px`}
+    class="workspace"
+    class:has-selection={!!page.params.id || page.route.id === '/capture'}
+>
     <aside class="notes-pane" aria-label="Notes library">
         <NotesList {index}>
             {#snippet settings()}

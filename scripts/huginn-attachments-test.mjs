@@ -581,8 +581,17 @@ async function main() {
         'true',
         40_000,
     );
-    const imported = (await (await fetch(`${API}/attachments`)).json()).find((x) => !before.has(x.note));
-    assert.equal(imported.alt, 'Blade root, teal', 'alt text comes back from the image description');
+    // Alt text comes back from the image's description; a file name standing in for none doesn't become one.
+    const reimported = () =>
+        fetch(`${API}/attachments`)
+            .then((r) => r.json())
+            .then((all) => all.filter((x) => !before.has(x.note)));
+    await until(
+        async () => (await reimported()).find((x) => x.name === 'big.png')?.alt === 'Blade root, teal',
+        'true',
+        20_000,
+    );
+    assert.equal((await reimported()).find((x) => x.name === 'offline.png').alt, undefined);
 
     // ---------- the whole library, into an empty one ----------
     await page.js(`document.querySelector('[aria-label="Main menu"]').click()`);
@@ -654,6 +663,71 @@ async function main() {
         elsewhere.kill();
     }
 
+    // ---------- quick capture, and sharing to Huginn ----------
+    await page.go(`${BASE}capture`);
+    await until(page.js, `!!document.querySelector('.capture textarea')`);
+    await page.js(`(() => {
+        const set = (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
+        set(document.querySelector('.capture textarea'), 'Call the crane company\\nAbout Tuesday');
+        set(document.querySelector('.capture .capture-link'), 'example.com/cranes');
+        document.querySelector('.capture').requestSubmit();
+    })()`);
+    await until(page.js, `location.pathname.includes('/n/') && !!document.querySelector('.tiptap')`, 20_000);
+    await until(page.js, `document.querySelector('.tiptap').textContent.includes('About Tuesday')`);
+    assert.equal(
+        await page.js(`document.querySelector('.tiptap a[href="https://example.com/cranes"]')?.textContent`),
+        'https://example.com/cranes',
+        'the link is kept with what was captured',
+    );
+    await until(page.js, `${rowTitle} === 'Call the crane company'`);
+    await until(
+        page.js,
+        `[...document.querySelectorAll('.folder-node .folder-name')].some((n) => n.textContent === 'Inbox')`,
+    );
+    // What another app shares arrives through the service worker, into the capture page, filled in.
+    assert.ok(await page.js(`!!navigator.serviceWorker.controller`), 'the service worker is in charge');
+    await page.js(helpers);
+    await page.js(`(async () => {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.enctype = 'multipart/form-data';
+        form.action = '${BASE}share';
+        const add = (name, value) => { const i = document.createElement('input'); i.name = name; i.value = value; form.append(i); };
+        add('title', 'Bearing spec');
+        add('text', 'See https://example.org/bearings for the torque table');
+        const files = document.createElement('input');
+        files.type = 'file';
+        files.name = 'files';
+        const dt = new DataTransfer();
+        dt.items.add(await __png(1200, 800, 'olive', 'bearing.png'));
+        files.files = dt.files;
+        form.append(files);
+        document.body.append(form);
+        form.submit();
+    })()`);
+    await until(
+        page.js,
+        `location.pathname.endsWith('/capture') && document.querySelector('.capture .capture-link')?.value === 'https://example.org/bearings'`,
+        20_000,
+    );
+    assert.equal(
+        await page.js(`document.querySelector('.capture textarea').value`),
+        'Bearing spec\nSee  for the torque table',
+    );
+    assert.equal(await page.js(`document.querySelector('.capture-files li span').textContent`), 'bearing.png');
+    await page.js(`document.querySelector('.capture').requestSubmit()`);
+    await until(
+        page.js,
+        `location.pathname.includes('/n/') && [...document.querySelectorAll('.attachment-image img')].some((i) => i.naturalWidth > 0)`,
+        20_000,
+    );
+    await until(page.js, `${rowTitle} === 'Bearing spec'`);
+    assert.equal(
+        await page.js(`(async () => (await (await caches.open('huginn-share')).keys()).length)()`),
+        0,
+        'what was shared is let go once taken',
+    );
+
     // ---------- backing up and restoring, attachments included ----------
     const backup = join(work, 'backup.db');
     const backedUp = await new Promise((resolve) => {
@@ -699,7 +773,7 @@ async function main() {
 
     for (const [sessionId, errors] of pageErrors) assert.deepEqual(errors, [], `page errors in ${sessionId}`);
     console.log(
-        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, the attachments browser, deleting, exporting and importing a note, the library into an empty one and again, backup and restore)',
+        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, the attachments browser, deleting, exporting and importing a note, the library into an empty one and again, quick capture, sharing to Huginn, backup and restore)',
     );
 }
 

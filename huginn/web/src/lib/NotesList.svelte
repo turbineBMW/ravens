@@ -13,6 +13,7 @@
     import PictureThumb from '$lib/PictureThumb.svelte';
     import { kindsByNote, libraryAttachments, refreshAttachments } from '$lib/attachments';
     import AttachmentsBrowser from '$lib/AttachmentsBrowser.svelte';
+    import { base } from '$app/paths';
     import { exportLibrary, importFiles } from '$lib/archive';
     import { save } from '$lib/noteExport';
     import Report from '$lib/Report.svelte';
@@ -487,6 +488,7 @@
                         browsing = true;
                     }}>Attachments…</button
                 >
+                <a class="btn" href="{base}/capture" onclick={() => (menu.open = false)}>Quick capture</a>
                 <button class="btn" type="button" onclick={() => importInput?.click()}>Import…</button>
                 <button class="btn" type="button" onclick={() => void exportAll()}>Export library…</button>
                 <button class="btn" type="button" aria-current={trash} onclick={() => choose({ kind: 'trash' })}>

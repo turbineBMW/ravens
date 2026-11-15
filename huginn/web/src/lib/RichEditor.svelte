@@ -29,9 +29,8 @@
     import DetectedMenu from '$lib/DetectedMenu.svelte';
     import { Attachment, type AttachmentAttrs } from '$lib/attachmentNode.svelte';
     import AttachmentViewer from '$lib/AttachmentViewer.svelte';
-    import { addFile, DeviceFull, sizeText, usage } from '$lib/files';
-    import { describe } from '$lib/thumbs';
-    import { newId } from '@ravens/ui/sync';
+    import { usage } from '$lib/files';
+    import { fileNodes, previewNode, setMaxFile } from '$lib/newAttachments';
     import Suggest, { type Suggestion } from '$lib/Suggest.svelte';
     import { NoteLink, attrsOf, type TypedLink } from '$lib/noteLinkNode';
     import { linkText, parseNoteUrl, suggestHeadings, suggestNotes, type LinkAttrs } from '$lib/noteLinks';
@@ -402,51 +401,13 @@
     let attachInput = $state<HTMLInputElement>();
     let cameraInput = $state<HTMLInputElement>();
     let attaching = $state('');
-    /** The server's limit, as last heard; until then, its default. */
-    let maxFile = 200 * 1024 * 1024;
-
-    /** What a file with no name of its own is called: a pasted screenshot, a photo. */
-    function nameFor(file: File, kind: string) {
-        if (file.name && file.name !== 'image.png') return file.name;
-        const ext = (file.type.split('/')[1] ?? 'bin').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '');
-        const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '.');
-        return `${kind === 'image' ? 'Image' : 'File'} ${stamp}.${ext}`;
-    }
-
     /** Keep the files here, queue them for the server, and put them in the note: at `at`, or at the caret. */
     async function insertFiles(files: File[], at?: number) {
         if (!editor || !files.length || get(note.tooNew)) return;
         pasteProblem = '';
-        const nodes: { type: 'attachment'; attrs: Partial<AttachmentAttrs> }[] = [];
-        for (const file of files) {
-            if (file.size > maxFile) {
-                pasteProblem = `“${file.name}” is ${sizeText(file.size)}; attachments can be up to ${sizeText(maxFile)}.`;
-                continue;
-            }
-            attaching = files.length > 1 ? `Adding ${nodes.length + 1} of ${files.length}…` : 'Adding…';
-            try {
-                const made = await describe(file, file.name);
-                const blob = await addFile(file);
-                const thumb = made.thumb ? await addFile(made.thumb) : '';
-                nodes.push({
-                    type: 'attachment',
-                    attrs: {
-                        blob,
-                        kind: made.kind,
-                        name: nameFor(file, made.kind),
-                        type: file.type || 'application/octet-stream',
-                        size: file.size,
-                        width: made.width,
-                        height: made.height,
-                        pages: made.pages,
-                        thumb,
-                    },
-                });
-            } catch (err) {
-                pasteProblem = err instanceof DeviceFull ? err.message : `Couldn’t add “${file.name}”.`;
-            }
-        }
+        const { nodes, problem } = await fileNodes(files, (text) => (attaching = text));
         attaching = '';
+        pasteProblem = problem;
         if (!nodes.length || !editor) return;
         note.allowAttachments();
         if (at !== undefined) editor.chain().focus().insertContentAt(at, nodes).run();
@@ -459,43 +420,17 @@
         void insertFiles(files);
     }
 
-    /** A card for a web page: its title, description and image, fetched by the server, which keeps it to public pages. */
+    /** A card for a web page, at `at`. */
     async function addPreview(url: string, at: number) {
         if (!editor) return;
         pasteProblem = '';
         attaching = 'Getting a preview…';
         try {
-            const res = await fetch(`${base}/v1/preview?${new URLSearchParams({ url })}`);
-            if (!res.ok) throw new Error((await res.text()) || 'no preview');
-            const page = (await res.json()) as { url: string; title: string; description: string; image?: string };
-            let thumb = '';
-            if (page.image) {
-                const img = await fetch(`${base}/v1/preview/image?${new URLSearchParams({ url: page.image })}`).catch(
-                    () => null,
-                );
-                if (img?.ok) thumb = await addFile(await img.blob()).catch(() => '');
-            }
+            const node = await previewNode(url);
             note.allowAttachments();
-            editor
-                .chain()
-                .focus()
-                .insertContentAt(Math.min(at, editor.state.doc.content.size), {
-                    type: 'attachment',
-                    attrs: {
-                        // A preview names no file; the id is its own, for the attachments list.
-                        blob: newId(),
-                        kind: 'link',
-                        url: page.url || url,
-                        title: page.title,
-                        description: page.description,
-                        thumb,
-                    },
-                })
-                .run();
+            editor.chain().focus().insertContentAt(Math.min(at, editor.state.doc.content.size), node).run();
         } catch (err) {
-            pasteProblem = navigator.onLine
-                ? `Couldn’t get a preview of that page: ${err instanceof Error ? err.message : 'no answer'}.`
-                : 'Previews need a connection.';
+            pasteProblem = err instanceof Error ? err.message : 'Couldn’t get a preview of that page.';
         } finally {
             attaching = '';
         }
@@ -719,7 +654,7 @@
         });
         editor = created;
         revealLinkedSection();
-        void usage().then((u) => u && (maxFile = u.max_file));
+        void usage().then((u) => u && setMaxFile(u.max_file));
         // Following a link to another section of this note may only change the hash.
         addEventListener('hashchange', revealLinkedSection);
         addEventListener('scroll', follow, true);
