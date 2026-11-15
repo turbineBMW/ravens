@@ -8,6 +8,9 @@
     import { childFolders, folderPath, folderTree, shownFolder, shownParents, within, type Folder } from '$lib/folders';
     import Icon from '$lib/Icon.svelte';
     import SketchThumb from '$lib/SketchThumb.svelte';
+    import SmartFolderActions from '$lib/SmartFolderActions.svelte';
+    import SmartFolderEditor from '$lib/SmartFolderEditor.svelte';
+    import { describe, matches, type Condition, type SmartFolder } from '$lib/smartFolders';
     import TagChip from '$lib/TagChip.svelte';
     import { filterByTag, refreshTags, tagFilter, tags, tagsFresh } from '$lib/tags';
     import { MIN_SEARCH, searchNotes, snippetParts, type SearchHit } from '$lib/search';
@@ -162,18 +165,76 @@
         const byText = [...hits.keys()].flatMap((id) => (!titled.has(id) && byId.get(id)) || []);
         return [...byTitle, ...byText];
     });
-    type Row = { kind: 'folder'; folder: Folder; depth: number } | { kind: 'note'; note: NoteMeta; depth: number };
+    // Smart Folders: at the top of the tree, collapsed until opened (on this device), as they repeat notes.
+    const smartStore = $derived(index.smartFolders);
+    const smart = $derived($smartStore);
+    const SMART_OPEN_KEY = 'huginn.smart.open';
+    let smartOpen = $state(readSmartOpen());
+    function readSmartOpen(): Set<string> {
+        try {
+            return new Set(JSON.parse(localStorage.getItem(SMART_OPEN_KEY) ?? '[]'));
+        } catch {
+            return new Set();
+        }
+    }
+    function toggleSmart(id: string) {
+        const next = new Set(smartOpen);
+        if (!next.delete(id)) next.add(id);
+        smartOpen = next;
+        try {
+            localStorage.setItem(SMART_OPEN_KEY, JSON.stringify([...next]));
+        } catch {
+            /* It still applies for this visit. */
+        }
+    }
+    const smartNotes = $derived.by(() => {
+        const ctx = {
+            now: Date.now(),
+            tagNotes,
+            placeOf,
+            within: (id: string) => within(folders, id),
+        };
+        return new Map(smart.map((f) => [f.id, active.filter((n) => matches(f, n, ctx))]));
+    });
+    const tagName = (key: string) => $tags.find((t) => t.tag === key)?.name ?? key;
+    const folderName = (id: string) => folderPath(folders, id) || 'a deleted folder';
+    const explain = (f: SmartFolder) =>
+        f.conditions.map((c) => describe(c, tagName, folderName)).join(f.match === 'all' ? ' and ' : ' or ') ||
+        'No conditions';
+    /** The Smart Folder being made or changed. */
+    let editingSmart = $state<{ folder: SmartFolder | null; draft?: Condition[] } | null>(null);
+    function saveFilter() {
+        editingSmart = {
+            folder: null,
+            draft: [
+                ...$tagFilter.include.map((tag): Condition => ({ kind: 'tag', has: true, tag })),
+                ...$tagFilter.exclude.map((tag): Condition => ({ kind: 'tag', has: false, tag })),
+            ],
+        };
+    }
+
+    type Row = { key: string; depth: number } & (
+        { kind: 'folder'; folder: Folder } | { kind: 'smart'; smart: SmartFolder } | { kind: 'note'; note: NoteMeta }
+    );
     /** The list as a tree of folders and notes, unless it's search results or Recently Deleted. */
     const asTree = $derived(!trash && !query.trim() && !filtering);
     const rows = $derived.by((): Row[] => {
-        if (!asTree) return visible.map((note) => ({ kind: 'note', note, depth: 0 }));
+        if (!asTree) return visible.map((note) => ({ kind: 'note', note, depth: 0, key: `note:${note.id}` }));
         const out: Row[] = [];
+        // A note can be in a Smart Folder as well as its own, so rows are keyed by where they are.
+        for (const f of smart) {
+            out.push({ kind: 'smart', smart: f, depth: 0, key: `smart:${f.id}` });
+            if (!smartOpen.has(f.id)) continue;
+            for (const note of smartNotes.get(f.id) ?? [])
+                out.push({ kind: 'note', note, depth: 1, key: `smart:${f.id}:${note.id}` });
+        }
         const walk = (place: string, depth: number) => {
             for (const folder of children.get(place) ?? []) {
-                out.push({ kind: 'folder', folder, depth });
+                out.push({ kind: 'folder', folder, depth, key: `folder:${folder.id}` });
                 if (!collapsed.has(folder.id)) walk(folder.id, depth + 1);
             }
-            for (const note of notesIn.get(place) ?? []) out.push({ kind: 'note', note, depth });
+            for (const note of notesIn.get(place) ?? [])
+                out.push({ kind: 'note', note, depth, key: `note:${note.id}` });
         };
         walk('', 0);
         return out;
@@ -351,6 +412,15 @@
                 {:else}
                     <button class="btn" type="button" onclick={() => (naming = true)}>New folder…</button>
                 {/if}
+                <button
+                    class="btn"
+                    type="button"
+                    onclick={() => {
+                        menu.open = false;
+                        if (trash) choose({ kind: 'all' });
+                        editingSmart = { folder: null };
+                    }}>New Smart Folder…</button
+                >
                 <button class="btn" type="button" aria-current={trash} onclick={() => choose({ kind: 'trash' })}>
                     Recently Deleted <span class="muted">{deleted.length + deletedFolders.length}</span>
                 </button>
@@ -404,6 +474,7 @@
             {#each $tagFilter.exclude as t (t)}
                 <TagChip {index} tag={t} info={$tags.find((i) => i.tag === t)} excluded />
             {/each}
+            <button class="btn clear-filter" type="button" onclick={saveFilter}>Save as Smart Folder…</button>
             <button class="btn clear-filter" type="button" onclick={() => tagFilter.set({ include: [], exclude: [] })}
                 >Clear</button
             >
@@ -434,8 +505,28 @@
         {:else if !ready}
             <p class="library-hint" role="status">Loading your notes…</p>
         {:else}
-            {#each rows as row (row.kind === 'note' ? row.note.id : `folder:${row.folder.id}`)}
-                {#if row.kind === 'folder'}
+            {#each rows as row (row.key)}
+                {#if row.kind === 'smart'}
+                    {@const f = row.smart}
+                    {@const open = smartOpen.has(f.id)}
+                    <div class="folder-node smart-node" style:--depth={row.depth}>
+                        <button
+                            class="folder-label"
+                            type="button"
+                            aria-expanded={open}
+                            title="{f.name || 'Untitled Smart Folder'}: {explain(f)}"
+                            onclick={() => toggleSmart(f.id)}
+                        >
+                            <Icon name="chevron" />
+                            <Icon name="smart" />
+                            <span class="folder-name">{f.name || 'Untitled Smart Folder'}</span>
+                            <span class="muted small">{smartNotes.get(f.id)?.length ?? 0}</span>
+                        </button>
+                        {#if !selecting}
+                            <SmartFolderActions {index} folder={f} onedit={() => (editingSmart = { folder: f })} />
+                        {/if}
+                    </div>
+                {:else if row.kind === 'folder'}
                     {@const f = row.folder}
                     {@const open = !collapsed.has(f.id)}
                     <div class="folder-node" style:--depth={row.depth}>
@@ -561,4 +652,14 @@
             <button class="btn danger" type="button" disabled={!chosen.length} onclick={deleteChosen}>Delete</button>
         {/if}
     </div>
+{/if}
+{#if editingSmart}
+    <SmartFolderEditor
+        {index}
+        folder={editingSmart.folder}
+        draft={editingSmart.draft}
+        folders={tree}
+        tags={shownTags}
+        onclose={() => (editingSmart = null)}
+    />
 {/if}

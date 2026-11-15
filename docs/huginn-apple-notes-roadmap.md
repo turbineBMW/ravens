@@ -4,7 +4,7 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 15, 2026, at `b622de9`:
+As of November 15, 2026, at `2b233ff`:
 
 | Phase | State |
 | --- | --- |
@@ -12,7 +12,7 @@ As of November 15, 2026, at `b622de9`:
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
 | P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders are next. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
 | P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -274,7 +274,11 @@ A first version had a folder view (`?folder=<id>`) that the list narrowed to, wi
 
 **Surface Pro 11, November 15, 2026, deployed to the mini:** passed, suggestions included.
 
-Still to do in this phase: Smart Folders, find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
+**Fourth increment, PR #19:** Smart Folders are saved filters, kept in the index document (`smartFolders`: id to { name, match, conditions, created }, the conditions as JSON) and worked out on the device from the index and the tag list (`smartFolders.ts`), so they work offline and open no notes. A note matches all of a Smart Folder's conditions or any of them: tagged or not with a tag; in or not in a folder, subfolders included, or no folder; edited or created in the last N days or not; with unchecked items, every item checked, or no items; pinned or not. Deleted notes never match, nor does anything a Smart Folder with no conditions. Conditions this client can't read, such as a newer one's, are left out rather than breaking it. They sit at the top of the tree with a funnel, collapsed until opened (kept per device, as they repeat notes), and an open one lists its notes beneath it while they stay in their own folders too; a row's tooltip says its conditions in words. *New Smart Folder…* in the main menu and *Save as Smart Folder…* in the tag filter open the editor; each row's menu edits it or deletes it, which leaves its notes where they are. Renaming a tag renames it in every Smart Folder's conditions, and deleting a tag removes the conditions on it, so saved filters follow tags predictably, as this phase's exit asks. No format change.
+
+**Surface Pro 11, November 15, 2026, deployed to the mini:** passed.
+
+Still to do in this phase: find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
 
 ### Phase 4 — Attachments, capture, and portability
 

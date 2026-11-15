@@ -851,6 +851,72 @@ main.workspace {
         transition: none;
     }
 }
+/* Smart Folders: rows at the top of the tree, marked with a funnel, and the dialog that makes them. */
+.smart-node .folder-label .icon + .icon {
+    transform: none;
+}
+.smart-editor {
+    width: min(560px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text);
+    box-shadow: var(--shadow);
+}
+.smart-editor::backdrop {
+    background: color-mix(in srgb, black 35%, transparent);
+}
+.smart-editor h2 {
+    margin: 0 0 12px;
+    font-size: 1.15rem;
+}
+.smart-editor form {
+    display: grid;
+    gap: 12px;
+}
+.smart-field {
+    display: grid;
+    gap: 4px;
+}
+.smart-editor input,
+.smart-editor select {
+    min-height: var(--tap);
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+}
+.smart-conditions {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.smart-conditions li {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+.smart-condition {
+    display: flex;
+    flex: 1;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+.smart-conditions input[type='number'] {
+    width: 5.5em;
+}
+.smart-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
 /* Tags: highlighted in notes, listed in the drawer, and chips for the list's filter. */
 .tiptap .hashtag {
     color: var(--accent);

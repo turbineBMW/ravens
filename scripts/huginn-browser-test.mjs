@@ -707,6 +707,57 @@ async function main() {
     await until(page.js, `document.querySelector('.tiptap').textContent.endsWith('for Home #Chores ')`);
     await until(page.js, `!document.querySelector('.tag-filter') && ${drawerTags} === '#Chores 1'`, 20_000);
 
+    // Smart Folders: made from the main menu with a tag and an open checklist, at the top of the
+    // tree and collapsed, its notes under it when expanded as well as in their own place; changed
+    // until nothing matches; one saved from the tag filter; both deleted, their notes staying put.
+    const smartNodes = `[...document.querySelectorAll('.smart-node')].map((n) => n.querySelector('.folder-name').textContent + ' ' + n.querySelector('.folder-label .small').textContent).join()`;
+    const inDialog = (js) => page.js(`(() => { const d = document.querySelector('.smart-editor[open]'); ${js} })()`);
+    const choose = (selector, value) =>
+        inDialog(
+            `const s = d.querySelector(${JSON.stringify(selector)}); s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event('change', { bubbles: true }));`,
+        );
+    const nameIt = (name) =>
+        inDialog(
+            `const i = d.querySelector('.smart-field input'); i.value = ${JSON.stringify(name)}; i.dispatchEvent(new Event('input', { bubbles: true }));`,
+        );
+    const saveIt = () =>
+        inDialog(`return new Promise((done) => setTimeout(() => done(d.querySelector('form').requestSubmit()), 50));`);
+    await mainMenu();
+    await press('.primary-menu .btn', 'New Smart Folder');
+    await until(page.js, `document.querySelector('.smart-editor[open] select[aria-label="Tag"]')?.value === 'chores'`);
+    await nameIt('Chores to do');
+    await press('.smart-editor[open] .btn', 'Add condition');
+    await choose('.smart-conditions li:nth-child(2) select[aria-label="Condition"]', 'checklist');
+    await until(
+        page.js,
+        `document.querySelector('.smart-editor[open] select[aria-label="Checklist state"]')?.value === 'open'`,
+    );
+    await saveIt();
+    await until(page.js, `!document.querySelector('.smart-editor[open]') && ${smartNodes} === 'Chores to do 1'`);
+    assert.equal(await page.js(`${rowTitles}.join()`), 'Groceries', 'collapsed to begin with');
+    await page.js(`document.querySelector('.smart-node .folder-label').click()`);
+    await until(page.js, `${rowTitles}.join() === 'Groceries,Groceries' && ${depths} === '1,0'`);
+    await page.js(`document.querySelector('[aria-label="Actions for Chores to do"]').click()`);
+    await press('.folder-menu[open] .btn', 'Edit Smart Folder');
+    await until(page.js, `document.querySelector('.smart-editor[open] .smart-field input')?.value === 'Chores to do'`);
+    await choose('select[aria-label="Checklist state"]', 'done');
+    await saveIt();
+    await until(page.js, `${smartNodes} === 'Chores to do 0' && ${rowTitles}.join() === 'Groceries'`);
+    await mainMenu();
+    await press('.tag-list .btn', '#Chores');
+    await press('.tag-filter .btn', 'Save as Smart Folder');
+    await until(page.js, `document.querySelector('.smart-editor[open] select[aria-label="Tag"]')?.value === 'chores'`);
+    await nameIt('Chores');
+    await saveIt();
+    await press('.tag-filter .btn', 'Clear');
+    await until(page.js, `${smartNodes} === 'Chores 1,Chores to do 0'`);
+    for (const name of ['Chores', 'Chores to do']) {
+        await page.js(`document.querySelector('[aria-label="Actions for ${name}"]').click()`);
+        await press('.folder-menu[open] .btn', 'Delete Smart Folder');
+        await press('.folder-menu[open] .btn.danger', 'Delete Smart Folder');
+    }
+    await until(page.js, `${smartNodes} === '' && ${rowTitles}.join() === 'Groceries'`);
+
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -870,7 +921,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), tags (highlighted, listed, suggested while typed, filtering both ways, rename, delete), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), tags (highlighted, listed, suggested while typed, filtering both ways, rename, delete), Smart Folders (made, in the tree, changed, saved from a filter, deleted), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 
