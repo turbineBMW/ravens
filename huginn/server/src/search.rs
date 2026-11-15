@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
+use crate::links::Link;
 use raven_server::sync::{read, stored, DocKey};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -17,7 +18,9 @@ use yrs::types::xml::{Xml, XmlElementRef, XmlFragment, XmlOut};
 use yrs::{GetString, Map, ReadTxn, Transact};
 
 /// Raise this when `lines` changes: startup then indexes every note again.
-pub const VERSION: i64 = 2;
+pub const VERSION: i64 = 3;
+/// A link to another note (format 5), an inline element with no text of its own.
+const NOTE_LINK: &str = "noteLink";
 /// The checklist a format 1 note has, and a checklist block's default.
 const FIRST_LIST: &str = "items";
 /// At most this many notes in one search's results.
@@ -126,15 +129,62 @@ fn block_lines<T: ReadTxn>(el: &XmlElementRef, txn: &T) -> Vec<String> {
 }
 
 /// The plain text inside an element, without formatting; a line break is a space.
+/// A note link is its label when it has one: one that follows its note's title
+/// isn't searchable here, since that title is in another document.
 fn inline<T: ReadTxn>(el: &XmlElementRef, txn: &T) -> String {
     el.children(txn)
         .map(|c| match c {
             XmlOut::Text(t) => AsRef::<TextRef>::as_ref(&t).get_string(txn),
             XmlOut::Element(e) if e.tag().as_ref() == "hardBreak" => " ".to_string(),
+            XmlOut::Element(e) if e.tag().as_ref() == NOTE_LINK => {
+                read::string(e.get_attribute(txn, "label"))
+            }
             XmlOut::Element(e) => inline(&e, txn),
             XmlOut::Fragment(_) => String::new(),
         })
         .collect()
+}
+
+/// A note's links to notes, in order, each with the section it's under; `note` is left empty.
+pub fn links<T: ReadTxn>(txn: &T) -> Vec<Link> {
+    fn within<T: ReadTxn>(el: &XmlElementRef, txn: &T, section: &str, out: &mut Vec<Link>) {
+        for child in el.children(txn) {
+            let XmlOut::Element(e) = child else {
+                continue;
+            };
+            if e.tag().as_ref() == NOTE_LINK {
+                let target = read::string(e.get_attribute(txn, "note"));
+                if !target.is_empty() {
+                    out.push(Link {
+                        note: String::new(),
+                        section: section.to_string(),
+                        target,
+                        target_section: read::string(e.get_attribute(txn, "section")),
+                    });
+                }
+            } else {
+                within(&e, txn, section, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let Some(body) = txn.get_xml_fragment("body") else {
+        return out;
+    };
+    let mut section = String::new();
+    for child in body.children(txn) {
+        let XmlOut::Element(el) = child else {
+            continue;
+        };
+        if el.tag().as_ref() == "heading" {
+            let id = read::string(el.get_attribute(txn, "section"));
+            if !id.is_empty() {
+                section = id;
+            }
+        }
+        within(&el, txn, &section, &mut out);
+    }
+    out
 }
 
 /// Mirror a changed note; for raven_server's `OnChange`.
@@ -147,8 +197,8 @@ pub fn on_change(key: &DocKey, txn: &yrs::TransactionMut, conn: &Connection) {
     }
 }
 
-/// Replace a note's lines and tags, unless they're unchanged (a drawing, say,
-/// or a checkbox), and record it as indexed.
+/// Replace a note's lines, tags and links, unless they're unchanged (a drawing,
+/// say, or a checkbox), and record it as indexed.
 pub fn index_note<T: ReadTxn>(
     owner: &str,
     note: &str,
@@ -181,6 +231,7 @@ pub fn index_note<T: ReadTxn>(
         }
     }
     crate::tags::store(&tx, owner, note, &crate::tags::note_tags(&now))?;
+    crate::links::store(&tx, owner, note, &links(txn))?;
     tx.execute(
         "INSERT INTO note_search_state (owner, note_id, version) VALUES (?1, ?2, ?3)
          ON CONFLICT (owner, note_id) DO UPDATE SET version = excluded.version",
@@ -420,6 +471,83 @@ mod tests {
                 line("s-later", "Train"),
                 line("s-later", "9:15"),
             ]
+        );
+    }
+
+    #[test]
+    fn links_are_found_inline_under_their_sections_and_stored_for_backlinks() {
+        let doc = Doc::new();
+        let body = doc.get_or_insert_xml_fragment("body");
+        let meta = doc.get_or_insert_map("meta");
+        {
+            let mut txn = doc.transact_mut();
+            meta.insert(&mut txn, "format", 5);
+            let link = |txn: &mut TransactionMut,
+                        el: &XmlElementRef,
+                        at: u32,
+                        note: &str,
+                        section: &str,
+                        label: &str| {
+                let l = el.insert(txn, at, XmlElementPrelim::empty("noteLink"));
+                l.insert_attribute(txn, "note", note);
+                l.insert_attribute(txn, "section", section);
+                l.insert_attribute(txn, "label", label);
+            };
+            let p = block(&mut txn, &body, "paragraph", "See ");
+            link(&mut txn, &p, 1, "plans", "", "");
+            let h = block(&mut txn, &body, "heading", "Later");
+            h.insert_attribute(&mut txn, "section", "s-later");
+            let ul = block(&mut txn, &body, "bulletList", "");
+            let li = ul.insert(&mut txn, 0, XmlElementPrelim::empty("listItem"));
+            let para = li.insert(&mut txn, 0, XmlElementPrelim::empty("paragraph"));
+            para.insert(&mut txn, 0, XmlTextPrelim::new("Then "));
+            link(&mut txn, &para, 1, "plans", "s-budget", "the budget");
+            link(&mut txn, &para, 2, "", "", "broken");
+        }
+        let txn = doc.transact();
+        let found: Vec<_> = links(&txn)
+            .into_iter()
+            .map(|l| (l.section, l.target, l.target_section))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("".into(), "plans".into(), "".into()),
+                ("s-later".into(), "plans".into(), "s-budget".into()),
+            ]
+        );
+        // A labelled link is searchable by its label; one following a title isn't.
+        assert_eq!(
+            lines(&txn),
+            vec![
+                line("", "See"),
+                line("s-later", "Later"),
+                line("s-later", "Then the budgetbroken")
+            ]
+        );
+        drop(txn);
+
+        let conn = conn();
+        index(&conn, "me", "trip", &doc);
+        index(&conn, "other", "theirs", &doc);
+        let mine = crate::links::list(&conn, "me").unwrap();
+        assert_eq!(mine.len(), 2);
+        assert!(mine.iter().all(|l| l.note == "trip" && l.target == "plans"));
+        assert_eq!(mine[1].section, "s-later");
+        assert_eq!(mine[1].target_section, "s-budget");
+        // Removing a link removes it from the list.
+        {
+            let mut txn = doc.transact_mut();
+            body.remove_range(&mut txn, 0, 1);
+        }
+        index(&conn, "me", "trip", &doc);
+        let mine = crate::links::list(&conn, "me").unwrap();
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].target_section, "s-budget");
+        assert_eq!(
+            crate::links::list(&conn, "other").unwrap().len(),
+            2,
+            "each owner's own"
         );
     }
 

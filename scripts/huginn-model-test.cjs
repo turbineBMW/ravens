@@ -252,7 +252,7 @@ const open = (id) => {
 };
 const entry = (id) => get(fixtureIndex.notes).find((n) => n.id === id);
 const groceries = open(GROCERIES);
-assert.equal(NOTE_FORMAT, 4);
+assert.equal(NOTE_FORMAT, 5);
 assert.equal(get(groceries.tooNew), false, 'a note without a format is format 1');
 assert.equal(get(groceries.title), 'Groceries');
 assert.deepEqual(
@@ -1042,6 +1042,132 @@ otherDevice.destroy();
     assert.equal(findState(state).current, -1);
 }
 
+// Links between notes: what they say, URLs read back, what's typed after `[[`, the
+// suggestions, backlinks, and a note with one being format 5 with its links as text.
+{
+    const { backlinksOf, linkText, parseNoteUrl, partialLink, suggestHeadings, suggestNotes } = lib('noteLinks');
+    const none = { section: '', heading: '', label: '' };
+    const plans = { title: 'Plans', deletedAt: 0 };
+    assert.deepEqual(linkText(none, plans), { text: 'Plans', state: 'live' }, 'it follows the title');
+    assert.equal(linkText({ ...none, label: ' The plan ' }, plans).text, 'The plan', 'unless it has a label');
+    assert.equal(linkText({ section: 's1', heading: 'Budget', label: '' }, plans).text, 'Plans › Budget');
+    assert.equal(linkText({ section: 's1', heading: 'Budget', label: '' }, plans, true).text, 'Budget', 'here');
+    assert.equal(linkText({ section: 's1', heading: '', label: '' }, plans).text, 'Plans › Section');
+    assert.equal(linkText(none, { title: ' ', deletedAt: 0 }).text, 'Untitled note');
+    assert.deepEqual(linkText(none, { title: 'Old', deletedAt: 5 }), { text: 'Old', state: 'deleted' });
+    assert.deepEqual(linkText(none, undefined), { text: 'Missing note', state: 'missing' });
+
+    const origin = 'https://mini.example';
+    assert.deepEqual(parseNoteUrl(`${origin}/huginn/n/abc_12-x`, origin, '/huginn'), { note: 'abc_12-x', section: '' });
+    assert.deepEqual(parseNoteUrl(` ${origin}/huginn/n/abc?view=trash#section-s9 `, origin, '/huginn'), {
+        note: 'abc',
+        section: 's9',
+    });
+    assert.equal(parseNoteUrl(`https://elsewhere.example/huginn/n/abc`, origin, '/huginn'), null, 'only this origin');
+    assert.equal(parseNoteUrl(`${origin}/muninn/n/abc`, origin, '/huginn'), null, 'only Huginn');
+    assert.equal(parseNoteUrl(`${origin}/huginn/n/abc/edit`, origin, '/huginn'), null);
+    assert.equal(parseNoteUrl('/huginn/n/abc', origin, '/huginn'), null, 'a whole URL, not a path');
+    assert.equal(parseNoteUrl('two words', origin, '/huginn'), null);
+
+    assert.equal(partialLink('See [['), '');
+    assert.equal(partialLink('See [[Pla'), 'Pla');
+    assert.equal(partialLink('[[#Bud'), '#Bud');
+    assert.equal(partialLink('[[Plans]] then'), null, 'a closed one is done');
+    assert.equal(partialLink('[Plans'), null);
+    assert.equal(partialLink(`[[${'x'.repeat(101)}`), null, 'not a whole paragraph');
+
+    const meta = (id, title, updated, extra = {}) => ({ id, title, updated, deletedAt: 0, ...extra });
+    const library = [
+        meta('a', 'Café plans', 3),
+        meta('b', 'Weekend plans', 5),
+        meta('c', 'Plans for spring', 1),
+        meta('d', 'Plans, deleted', 9, { deletedAt: 1 }),
+        meta('e', 'Plans here', 9),
+        meta('f', '', 2),
+    ];
+    assert.deepEqual(
+        suggestNotes(library, 'plans', 'e').map((n) => n.id),
+        ['c', 'b', 'a'],
+        'starting with it, then containing it, each newest first, not deleted or this note',
+    );
+    assert.deepEqual(
+        suggestNotes(library, 'cafe', 'e').map((n) => n.id),
+        ['a'],
+        'accents folded',
+    );
+    assert.deepEqual(
+        suggestNotes(library, 'untitled', 'e').map((n) => n.id),
+        ['f'],
+    );
+    assert.deepEqual(
+        suggestNotes(library, '', 'e').map((n) => n.id),
+        ['b', 'a', 'f', 'c'],
+        'newest first',
+    );
+    assert.deepEqual(
+        suggestHeadings([{ text: 'Budget' }, { text: 'Trip budget' }, { text: '' }, { text: 'Other' }], 'bud').map(
+            (h) => h.text,
+        ),
+        ['Budget', 'Trip budget'],
+    );
+
+    const all = [
+        { note: 'x', section: 's1', target: 'plans' },
+        { note: 'x', target: 'plans', target_section: 's2' },
+        { note: 'plans', target: 'plans' },
+        { note: 'y', target: 'other' },
+        { note: 'z', target: 'plans' },
+    ];
+    assert.deepEqual(
+        backlinksOf(all, 'plans'),
+        [
+            { note: 'x', section: 's1' },
+            { note: 'z', section: '' },
+        ],
+        'each note once, at its first link, never the note itself',
+    );
+
+    // A link raises the note to format 5, never lowers it, and exports as what it says.
+    const linkIndex = openIndex();
+    const targetId = linkIndex.create('text');
+    const target = openNote(targetId, linkIndex);
+    target.initialise();
+    linkIndex.touch(targetId, { title: 'Trip plans' });
+    const sourceId = linkIndex.create('text');
+    const source = openNote(sourceId, linkIndex);
+    source.initialise();
+    assert.equal(get(source.format), 2);
+    source.allowLinks();
+    assert.equal(get(source.format), 5);
+    source.doc.doc.transact(() => {
+        const p = source.body.get(0);
+        p.insert(0, [new Y.XmlText('See ')]);
+        const plain = new Y.XmlElement('noteLink');
+        plain.setAttribute('note', targetId);
+        const labelled = new Y.XmlElement('noteLink');
+        labelled.setAttribute('note', targetId);
+        labelled.setAttribute('section', 's1');
+        labelled.setAttribute('heading', 'Budget');
+        labelled.setAttribute('label', 'the money');
+        const missing = new Y.XmlElement('noteLink');
+        missing.setAttribute('note', 'gone');
+        p.insert(1, [plain, new Y.XmlText(' and '), labelled, new Y.XmlText(', '), missing]);
+    });
+    assert.equal(source.plainText(), 'See Trip plans and the money, Missing note\n');
+    source.repairIndex();
+    assert.equal(
+        get(linkIndex.notes).find((n) => n.id === sourceId).title,
+        'See Trip plans and the money, Missing note',
+    );
+    source.newInk();
+    assert.equal(get(source.format), 5, 'a drawing after a link keeps format 5');
+    const later = openNote(linkIndex.create('text'), linkIndex);
+    later.initialise();
+    later.doc.doc.getMap('meta').set('format', NOTE_FORMAT + 1);
+    later.allowLinks();
+    assert.equal(get(later.format), NOTE_FORMAT + 1, 'a newer note is left alone');
+}
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
@@ -1060,6 +1186,7 @@ newer.uncheckAll();
 newer.removeChecked();
 newer.repairIndex();
 newer.newInk();
+newer.allowLinks();
 assert.equal(newer.ink('strokes:refused').add({ tool: 'pen', color: 'ink', width: 4, points }), '');
 newer.ink('strokes:refused').erase(new Map([['anything', []]]));
 newer.ink('strokes:refused').remove(['anything']);
@@ -1069,7 +1196,7 @@ assert.equal(newer.renameTag('anything', 'else'), false);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), find in note (folding, offsets, order, keeping its place), plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), find in note (folding, offsets, order, keeping its place), note links (what they say, URLs, typing, suggestions, backlinks, format 5, as text), plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

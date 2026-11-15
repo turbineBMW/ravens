@@ -705,6 +705,125 @@ async function main() {
     await page.go(noteUrl);
     await until(page.js, `!!document.querySelector('.tiptap')`);
 
+    // Links between notes: `[[` suggests notes and `[[#` this note's sections; a link follows its
+    // note's title unless labelled, opens it, and shows in its backlinks; Copy link puts a section
+    // link on the clipboard that pastes as one; links to deleted and missing notes say so.
+    const linkTexts = `[...document.querySelectorAll('.tiptap .note-link')].map((a) => a.textContent + ':' + a.dataset.state).join()`;
+    const linkSuggestions = `[...document.querySelectorAll('.tag-suggest[aria-label="Notes to link to"] button .folder-name')].map((b) => b.textContent).join()`;
+    // Tiptap focuses on the next frame, so wait for it before typing.
+    const atEnd = async () => {
+        await page.js(`document.querySelector('.tiptap').editor.chain().focus('end').run()`);
+        await until(page.js, `document.activeElement === document.querySelector('.tiptap')`);
+    };
+    const paste = (type, data) =>
+        page.js(`(() => {
+            const data = new DataTransfer();
+            data.setData(${JSON.stringify(type)}, ${JSON.stringify(data)});
+            document.querySelector('.tiptap').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+        })()`);
+    await newNote(page);
+    const tripId = (await page.js('location.pathname')).split('/').pop();
+    await focusBody(page);
+    await page.js(
+        `document.querySelector('.tiptap').editor.chain().focus().insertContent('<p>Trip plans</p><h2>Budget</h2><p>Spend less</p>').run()`,
+    );
+    await until(page.js, `${rowTitle} === 'Trip plans'`);
+    await until(page.js, subtitleIs('Saved'));
+    await page.go(noteUrl);
+    await until(page.js, `!!document.querySelector('.tiptap h2[data-section]')`);
+    await atEnd();
+    await page.type('See [[trip');
+    await until(page.js, `${linkSuggestions} === 'Trip plans'`);
+    await page.key('Enter', 13);
+    await until(page.js, `${linkTexts} === 'Trip plans:live'`);
+    await page.type(' and [[#pla');
+    await until(page.js, `${linkSuggestions} === 'Plans'`);
+    await page.key('Enter', 13);
+    await until(page.js, `${linkTexts} === 'Trip plans:live,Plans:live'`);
+    // A section of this note opens in place, expanded.
+    await until(page.js, hidden('Under plans'));
+    await page.js(`document.querySelectorAll('.tiptap .note-link')[1].click()`);
+    await until(page.js, `${hidden('Under plans')} === false`);
+    assert.equal(await page.js('location.href'), noteUrl, 'a link within the note stays on it');
+    await page.js(`document.querySelector('.tiptap h2 .section-toggle').click()`);
+    await until(page.js, hidden('Under plans'));
+    // A label, set with the caret just after the link, and cleared again.
+    const setLabel = async (label) => {
+        await page.js(`(() => {
+            const ed = document.querySelector('.tiptap').editor;
+            let at = 0;
+            ed.state.doc.descendants((node, pos) => { if (node.type.name === 'noteLink' && node.attrs.note === ${JSON.stringify(tripId)}) at = pos + 1; });
+            ed.chain().focus().setTextSelection(at).run();
+        })()`);
+        await tool(page, 'Link');
+        await until(page.js, `document.querySelector('.link-field input')?.placeholder === 'Trip plans'`);
+        await page.js(`(() => {
+            const field = document.querySelector('.link-field input');
+            field.value = ${JSON.stringify(label)};
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.form.requestSubmit();
+        })()`);
+    };
+    await setLabel('the trip');
+    await until(page.js, `${linkTexts} === 'the trip:live,Plans:live'`);
+    await setLabel('');
+    await until(page.js, `${linkTexts} === 'Trip plans:live,Plans:live'`);
+    await until(page.js, subtitleIs('Saved'));
+    // Following it, the note it points at lists this one; renamed, the link follows.
+    await page.js(`document.querySelector('.tiptap .note-link').click()`);
+    await until(page.js, `location.pathname.endsWith(${JSON.stringify('/' + tripId)})`);
+    await until(
+        page.js,
+        `[...document.querySelectorAll('.backlinks a')].map((a) => a.textContent).join() === 'Groceries'`,
+    );
+    await setTitle(page, 'Spring trip');
+    await until(page.js, subtitleIs('Saved'));
+    // Copy link, with the caret under Budget.
+    await page.js(`(() => {
+        window.__copied = null;
+        navigator.clipboard.write = async (items) => {
+            window.__copied = Object.fromEntries(await Promise.all(items[0].types.map(async (t) => [t, await (await items[0].getType(t)).text()])));
+        };
+        const ed = document.querySelector('.tiptap').editor;
+        let at = 0;
+        ed.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'Spend less') at = pos + 2; });
+        ed.chain().focus().setTextSelection(at).run();
+    })()`);
+    await tool(page, 'Copy link');
+    const copied = await until(page.js, 'window.__copied');
+    const budgetSection = await page.js(`document.querySelector('.tiptap h2').dataset.section`);
+    assert.ok(copied['text/plain'].endsWith(`/huginn/n/${tripId}#section-${budgetSection}`), copied['text/plain']);
+    assert.ok(copied['text/html'].includes('data-heading="Budget"'), copied['text/html']);
+    await page.js(`document.querySelector('.backlinks a').click()`);
+    await until(
+        page.js,
+        `location.pathname === new URL(${JSON.stringify(noteUrl)}).pathname && ${linkTexts} === 'Spring trip:live,Plans:live'`,
+    );
+    await atEnd();
+    await paste('text/html', copied['text/html']);
+    await until(page.js, `${linkTexts} === 'Spring trip:live,Plans:live,Spring trip › Budget:live'`);
+    await atEnd();
+    await paste('text/plain', new URL(`n/nosuchnote0000000001`, BASE).href);
+    await until(page.js, `${linkTexts}.endsWith(',Missing note:missing')`);
+    await until(page.js, subtitleIs('Saved'));
+    // A section link opens the other note at that section.
+    await page.js(`document.querySelectorAll('.tiptap .note-link')[2].click()`);
+    await until(page.js, `location.hash === ${JSON.stringify('#section-' + budgetSection)}`);
+    // Deleted, the note's links say so; it stays deleted for the checks below.
+    await page.js(`document.querySelector('[aria-label="Note actions"]').click()`);
+    await page.js(
+        `[...document.querySelectorAll('.editor-pane .menu .btn')].find((b) => b.textContent.startsWith('Delete note')).click()`,
+    );
+    await page.js(
+        `[...document.querySelectorAll('.editor-pane .menu .btn')].find((b) => b.textContent === 'Move to Recently Deleted').click()`,
+    );
+    await until(page.js, `!location.pathname.includes(${JSON.stringify(tripId)})`);
+    await page.go(noteUrl);
+    await until(
+        page.js,
+        `${linkTexts} === 'Spring trip:deleted,Plans:live,Spring trip › Budget:deleted,Missing note:missing'`,
+    );
+
     // Tags: written in the text, shown as tags, listed in the drawer, filtering the list from a
     // click, the other way round too, and renamed and deleted in the notes written with them.
     await page.js(
@@ -854,6 +973,7 @@ async function main() {
     await until(other.js, `document.querySelectorAll('.note-row.selected svg.sketch path').length === 4`);
     await until(other.js, `document.querySelectorAll('.folder-node').length === 2`); // Folders sync.
     await until(other.js, `document.querySelector('.tiptap .hashtag')?.dataset.tag === 'Chores'`); // And renamed tags.
+    await until(other.js, `document.querySelectorAll('.tiptap .note-link').length === 4`); // And links.
     assert.deepEqual(
         await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
         sectionIds,
@@ -1002,7 +1122,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), tags (highlighted, listed, suggested while typed, filtering both ways, rename, delete), Smart Folders (made, in the tree, changed, saved from a filter, deleted), find in note (Ctrl+F, counting, stepping into a collapsed section, checked items, Escape, the menu, 320), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), tags (highlighted, listed, suggested while typed, filtering both ways, rename, delete), Smart Folders (made, in the tree, changed, saved from a filter, deleted), find in note (Ctrl+F, counting, stepping into a collapsed section, checked items, Escape, the menu, 320), note links (typed with suggestions, sections, labels, following titles, backlinks, copy and paste, deleted and missing), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

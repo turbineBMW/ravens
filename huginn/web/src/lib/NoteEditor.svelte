@@ -1,7 +1,10 @@
 <script lang="ts">
-    import { onMount } from 'svelte';
+    import { getContext, onMount } from 'svelte';
+    import { page } from '$app/state';
     import { remindersFor, reminderHref, type Reminder } from '$lib/links';
-    import type { Note } from '$lib/notes';
+    import { backlinksOf, libraryLinks, refreshLinks } from '$lib/noteLinks';
+    import type { Index, Note } from '$lib/notes';
+    import { noteHref, scopeOf } from '$lib/scope';
 
     let { note, id }: { note: Note; id: string } = $props();
 
@@ -24,6 +27,19 @@
         return () => (gone = true);
     });
     const openReminders = $derived(reminders.filter((r) => !r.done));
+
+    // The notes linking to this one, as the server last listed them, leaving out deleted ones.
+    const libraryNotes = getContext<Index>('index').notes;
+    onMount(() => void refreshLinks());
+    const backlinks = $derived.by(() => {
+        const live = new Map($libraryNotes.filter((n) => !n.deletedAt).map((n) => [n.id, n]));
+        return backlinksOf($libraryLinks, id).flatMap(({ note: from, section }) => {
+            const entry = live.get(from);
+            if (!entry) return [];
+            const href = noteHref(from, scopeOf(page.url), section || undefined);
+            return [{ id: from, href, title: entry.title.trim() || 'Untitled note' }];
+        });
+    });
 </script>
 
 <article class="note">
@@ -43,4 +59,13 @@
     {:catch}
         <p role="alert">Could not load the editor. Reconnect and reopen Huginn.</p>
     {/await}
+    {#if backlinks.length}
+        <p class="backlinks small">
+            <span class="muted">Linked from</span>
+            {#each backlinks as link, i (link.id)}
+                {#if i > 0}·{/if}
+                <a href={link.href}>{link.title}</a>
+            {/each}
+        </p>
+    {/if}
 </article>

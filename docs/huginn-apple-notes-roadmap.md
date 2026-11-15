@@ -12,7 +12,7 @@ As of November 15, 2026, at `2b233ff`:
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
 | P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. Find in note (PR #20) passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. Find in note (PR #20) passed on the Surface. Links between notes, with backlinks (PR #21, format 5), passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
 | P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -98,9 +98,9 @@ Primary implementation references: [note model](../huginn/web/src/lib/notes.ts),
 | Apple Notes capability | Huginn today | Planned delivery |
 | --- | --- | --- |
 | Phone navigation; wider list/editor workspace | Separate card and editor routes | P1: one pane when narrow, two when wide |
-| List and gallery views; date grouping | Card grid and updated-date ordering | P1 list; P3 gallery, grouping, view preferences |
+| List and gallery views; date grouping | Card grid and updated-date ordering | P1 list. Gallery and grouping dropped in P3: the tree and search cover them. |
 | Folders and nested folders; move notes | Missing | P3: folder tree, move, rename, batch actions |
-| Pinning; title/created/edited sorting | Pin field only; edited sort | P1 pin control; P3 complete sort options |
+| Pinning; title/created/edited sorting | Pin field only; edited sort | P1 pin control. Other sort orders dropped in P3: the tree and search cover them. |
 | Rich text, headings, emphasis, highlights, lists, tables | Checklist only | P2: mixed rich document |
 | Collapsible headings; divider lines | Missing | P2: stable section IDs and local collapse state |
 | Checklists alongside prose | Standalone checklist | P2: inline checklists; preserve shopping mode |
@@ -282,7 +282,13 @@ A first version had a folder view (`?folder=<id>`) that the list narrowed to, wi
 
 **Surface Pro 11, November 14, 2026, deployed to the mini:** passed.
 
-Still to do in this phase: list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers. Replace, as Apple Notes has with find, could follow find in note.
+Dropped, November 14, 2026: list options (a gallery view, grouping by date, sorting by title or date created). Folders as a tree, Smart Folders and full-text search already find notes, and the list stays sorted by date edited, pinned notes first.
+
+**Sixth increment, PR #21:** links between notes, as a note format 5 (`NOTE_FORMAT`, `CLIENT_VERSION` and Huginn's `min_client` are 5: a format 4 client would delete a link it can't read). A link is an inline `noteLink` node naming a note by ID, and optionally a section in it, so moving the note keeps it working. Typing `[[` suggests notes by title (accents and case ignored, newest first, at most six, never the note being written), and `[[#` this note's headings; Enter, Tab, a click or a tap makes the link, and Escape puts the suggestions away. A link shows its note's title as it is now, so renaming a note renames its links; a section link adds the heading as it was when the link was made (*Spring trip › Budget*), or within its own note shows only the heading. The *Link* tool, with a link selected or the caret just after one, gives it a label of its own, and clearing the label follows the title again. A link to a note in Recently Deleted is struck through, and one to a note that isn't in the library says *Missing note*; both still open the note's page, which says which. Clicking a link opens its note at its section, expanded; one to a section of the same note opens it in place. *Copy link*, in the toolbar, copies a link to the section the caret is in, or to the note before any heading, as the note's URL and as HTML; pasting either into a note, or any Huginn note URL on its own, makes a link. Notes' plain text, titles and previews show what their links say. The server mirrors each note's links into `note_links` with its search lines (the extraction's `VERSION` is 3, so startup indexes every note again), and `GET /v1/links` lists them; each device caches the list, as it does tags, and a note shows *Linked from* with the notes linking to it, each opening at the link. A label is searchable; a link following a title isn't, since that title is in another note's document. Accepted limits: a section link's heading text doesn't follow a renamed heading, and the suggestions offer sections of the open note only, so a section elsewhere is linked with *Copy link*.
+
+**Surface Pro 11, November 14, 2026, deployed to the mini:** passed.
+
+Still to do in this phase: detecting emails, URLs and phone numbers. Replace, as Apple Notes has with find, could follow find in note.
 
 ### Phase 4 — Attachments, capture, and portability
 

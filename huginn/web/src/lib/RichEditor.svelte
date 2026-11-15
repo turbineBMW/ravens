@@ -25,9 +25,14 @@
     import Icon from '$lib/Icon.svelte';
     import { Sections, revealPosition, revealSection, sectionAt } from '$lib/sections';
     import { Hashtags, type TypedTag } from '$lib/hashtags';
-    import TagSuggest from '$lib/TagSuggest.svelte';
+    import Suggest, { type Suggestion } from '$lib/Suggest.svelte';
+    import { NoteLink, attrsOf, type TypedLink } from '$lib/noteLinkNode';
+    import { linkText, parseNoteUrl, suggestHeadings, suggestNotes, type LinkAttrs } from '$lib/noteLinks';
+    import { noteHref, scopeOf } from '$lib/scope';
+    import { base } from '$app/paths';
+    import { goto } from '$app/navigation';
     import { filterByTag, suggestTags, tags, type TagInfo } from '$lib/tags';
-    import type { Index, Note } from '$lib/notes';
+    import { NOTE_FORMAT, type Index, type Note } from '$lib/notes';
 
     let { note, id }: { note: Note; id: string } = $props();
 
@@ -40,36 +45,87 @@
     }
     let editor = $state.raw<Editor | null>(null);
 
-    // Suggesting the tags already used while one is typed.
-    const libraryNotes = getContext<Index>('index').notes;
+    // Suggestions while something is typed: the tags already used after `#`, and
+    // notes, or this note's sections, after `[[`.
+    const index = getContext<Index>('index');
+    const libraryNotes = index.notes;
     const liveNotes = $derived(new Set($libraryNotes.filter((n) => !n.deletedAt).map((n) => n.id)));
     const countOf = (t: TagInfo) => t.notes.filter((id) => liveNotes.has(id)).length;
-    let typing = $state<(TypedTag & { left: number; top: number; bottom: number }) | null>(null);
-    /** The tag whose suggestions Escape put away, by where its `#` is. */
+    type Where = { left: number; top: number; bottom: number };
+    let typingTag = $state<(TypedTag & Where) | null>(null);
+    let typingLink = $state<(TypedLink & Where) | null>(null);
+    /** A link being typed wins: `[[#` starts a section, not a tag. */
+    const typing = $derived(typingLink ?? typingTag);
+    /** What Escape put the suggestions away for, by where it starts. */
     let dismissed = $state<number | null>(null);
     let picked = $state(0);
-    const suggestions = $derived(
-        typing && typing.from !== dismissed
-            ? suggestTags($tags, typing.typed, countOf).filter((t) => t.name !== typing!.typed)
-            : [],
-    );
-    function onTyping(next: typeof typing) {
-        if (!next || next.from !== dismissed) dismissed = null;
-        if (next?.typed !== typing?.typed) picked = 0;
-        typing = next;
+    type Choice = Suggestion &
+        (
+            | { kind: 'tag'; tag: TagInfo }
+            | { kind: 'note'; note: string }
+            | { kind: 'section'; section: string; heading: string }
+        );
+    /** This note's headings, for `[[#`. */
+    const headings = $derived.by(() => {
+        void revision;
+        const found: { section: string; text: string }[] = [];
+        editor?.state.doc.forEach((node) => {
+            if (node.type.name === 'heading' && node.attrs.section)
+                found.push({ section: node.attrs.section, text: node.textContent });
+        });
+        return found;
+    });
+    const suggestions = $derived.by((): Choice[] => {
+        if (!typing || typing.from === dismissed) return [];
+        if (typingLink) {
+            const typed = typingLink.typed;
+            if (typed.startsWith('#')) {
+                return suggestHeadings(headings, typed.slice(1)).map((h) => ({
+                    kind: 'section',
+                    key: h.section,
+                    text: h.text.trim(),
+                    detail: 'This note',
+                    section: h.section,
+                    heading: h.text.trim(),
+                }));
+            }
+            return suggestNotes($libraryNotes, typed, id).map((n) => ({
+                kind: 'note',
+                key: n.id,
+                text: n.title.trim() || 'Untitled note',
+                note: n.id,
+            }));
+        }
+        return suggestTags($tags, typingTag!.typed, countOf)
+            .filter((t) => t.name !== typingTag!.typed)
+            .map((t) => ({ kind: 'tag', key: t.tag, text: `#${t.name}`, detail: String(countOf(t)), tag: t }));
+    });
+    function onTypingTag(next: typeof typingTag) {
+        typingTag = next;
+        typed();
+    }
+    function onTypingLink(next: typeof typingLink) {
+        typingLink = next;
+        typed();
+    }
+    let lastTyped: string | undefined;
+    function typed() {
+        if (!typing || typing.from !== dismissed) dismissed = null;
+        if (typing?.typed !== lastTyped) picked = 0;
+        lastTyped = typing?.typed;
     }
     function onKey(event: KeyboardEvent): boolean {
         const n = suggestions.length;
         if (!n || event.altKey || event.ctrlKey || event.metaKey) return false;
         if (event.key === 'ArrowDown') picked = (picked + 1) % n;
         else if (event.key === 'ArrowUp') picked = (picked - 1 + n) % n;
-        else if (event.key === 'Enter' || event.key === 'Tab') pickTag(suggestions[picked]);
+        else if (event.key === 'Enter' || event.key === 'Tab') pick(suggestions[picked]);
         else if (event.key === 'Escape') dismissed = typing?.from ?? null;
         else return false;
         return true;
     }
-    /** Fill in the whole tag, and a space after it unless one's there. */
-    function pickTag(tag: TagInfo) {
+    /** Fill in the whole tag, or the link, and a space after it unless one's there. */
+    function pick(choice: Choice) {
         if (!editor || !typing) return;
         const { from, to } = typing;
         const next = editor.state.doc.textBetween(
@@ -78,18 +134,49 @@
             undefined,
             '\ufffc',
         );
-        editor
-            .chain()
-            .focus()
-            .insertContentAt({ from, to }, `#${tag.name}${/\s/u.test(next) ? '' : ' '}`)
-            .run();
+        const space = /\s/u.test(next) ? '' : ' ';
+        if (choice.kind === 'tag') {
+            editor.chain().focus().insertContentAt({ from, to }, `#${choice.tag.name}${space}`).run();
+            return;
+        }
+        const attrs: LinkAttrs =
+            choice.kind === 'note'
+                ? { note: choice.note, section: '', heading: '', label: '' }
+                : { note: id, section: choice.section, heading: choice.heading, label: '' };
+        const content = [{ type: 'noteLink', attrs }, ...(space ? [{ type: 'text', text: space }] : [])];
+        editor.chain().focus().insertContentAt({ from, to }, content).run();
     }
-    /** Keep the suggestions under the tag as the note scrolls. */
+    /** Keep the suggestions under what's typed as the note scrolls. */
     function follow() {
-        if (!typing || !editor) return;
-        const { left, top, bottom } = editor.view.coordsAtPos(typing.from);
-        typing = { ...typing, left, top, bottom };
+        if (!editor) return;
+        if (typingTag) typingTag = { ...typingTag, ...editor.view.coordsAtPos(typingTag.from) };
+        if (typingLink) typingLink = { ...typingLink, ...editor.view.coordsAtPos(typingLink.from) };
     }
+
+    // Links to notes: what they say follows the index, and they open in place.
+    const scope = () => scopeOf(new URL(location.href));
+    const linkHref = (a: LinkAttrs) => noteHref(a.note, scope(), a.section || undefined);
+    const textOfLink = (a: LinkAttrs) => linkText(a, index.entry(a.note), a.note === id).text;
+    function watchLink(a: LinkAttrs, show: (text: string, state: 'live' | 'deleted' | 'missing') => void) {
+        return libraryNotes.subscribe((all) => {
+            const { text, state } = linkText(
+                a,
+                all.find((n) => n.id === a.note),
+                a.note === id,
+            );
+            show(text, state);
+        });
+    }
+    function openLink(a: LinkAttrs) {
+        // A section of this note opens in place.
+        if (a.note === id) {
+            if (a.section && editor) revealSection(editor.view, a.section);
+            return;
+        }
+        void goto(linkHref(a));
+    }
+    const parseUrl = (text: string) => parseNoteUrl(text, location.origin, base);
+
     // Find in note: a field under the toolbar, Ctrl+F or the note menu to open it.
     let finding = $state(false);
     let query = $state('');
@@ -222,6 +309,42 @@
         return remindMeHref(id, text, section ? `section-${section}` : undefined);
     });
 
+    /** Put a link to the section the caret is in, or to the note, on the clipboard. */
+    let copied = $state(false);
+    async function copyLink() {
+        if (!editor) return;
+        pasteProblem = '';
+        const section = sectionAt(editor.state, editor.state.selection.from) ?? '';
+        let heading = '';
+        editor.state.doc.forEach((node) => {
+            if (section && node.attrs.section === section) heading = node.textContent.trim();
+        });
+        const attrs: LinkAttrs = { note: id, section, heading, label: '' };
+        const url = new URL(noteHref(id, { kind: 'all' }, section || undefined), location.origin).href;
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.textContent = linkText(attrs, index.entry(id)).text;
+        anchor.dataset.noteLink = '';
+        if (section) Object.assign(anchor.dataset, { section, heading });
+        try {
+            await navigator.clipboard.write([
+                new ClipboardItem({
+                    'text/html': new Blob([anchor.outerHTML], { type: 'text/html' }),
+                    'text/plain': new Blob([url], { type: 'text/plain' }),
+                }),
+            ]);
+        } catch {
+            try {
+                await navigator.clipboard.writeText(url);
+            } catch {
+                pasteProblem = "Couldn't copy the link. Allow clipboard access, or copy the address bar's.";
+                return;
+            }
+        }
+        copied = true;
+        setTimeout(() => (copied = false), 1500);
+    }
+
     let pasteProblem = $state('');
     async function pastePlain() {
         pasteProblem = '';
@@ -259,13 +382,41 @@
         else chain().setParagraph().run();
     }
 
+    /** A link to a note that's selected, or just before the caret: the Link tool sets its label. */
+    const noteLinkAt = $derived.by(() => {
+        void revision;
+        if (!editor) return null;
+        const { selection } = editor.state;
+        if (selection instanceof NodeSelection && selection.node.type.name === 'noteLink') {
+            return { pos: selection.from, attrs: attrsOf(selection.node) };
+        }
+        const before = selection.empty ? selection.$from.nodeBefore : null;
+        if (before?.type.name === 'noteLink') return { pos: selection.from - 1, attrs: attrsOf(before) };
+        return null;
+    });
+    /** The link to a note whose label the field is setting, if that's what it's for. */
+    let labelling = $state<{ pos: number; attrs: LinkAttrs } | null>(null);
     function toggleLinkField() {
-        linkUrl = editor?.getAttributes('link').href ?? '';
+        labelling = noteLinkAt;
+        linkUrl = labelling ? labelling.attrs.label : (editor?.getAttributes('link').href ?? '');
         linkOpen = !linkOpen;
         if (linkOpen) queueMicrotask(() => linkInput?.focus());
     }
     function applyLink(event: SubmitEvent) {
         event.preventDefault();
+        if (labelling) {
+            const { pos, attrs } = labelling;
+            const label = linkUrl.trim();
+            chain()
+                .command(({ tr }) => {
+                    if (tr.doc.nodeAt(pos)?.type.name !== 'noteLink') return false;
+                    tr.setNodeMarkup(pos, undefined, { ...attrs, label });
+                    return true;
+                })
+                .run();
+            linkOpen = false;
+            return;
+        }
         const url = linkUrl.trim();
         const href = !url || /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : `https://${url}`;
         if (href) chain().extendMarkRange('link').setLink({ href }).run();
@@ -353,7 +504,18 @@
                         if ((document.querySelector('.notes-pane') as HTMLElement | null)?.offsetParent)
                             filterByTag(tag);
                     },
-                    onTyping,
+                    onTyping: onTypingTag,
+                    onKey,
+                }),
+                NoteLink.configure({
+                    textOf: textOfLink,
+                    watch: watchLink,
+                    href: linkHref,
+                    open: openLink,
+                    onLink: note.allowLinks,
+                    needsFormat: () => get(note.format) < NOTE_FORMAT,
+                    parseUrl,
+                    onTyping: onTypingLink,
                     onKey,
                 }),
                 FindInNote.configure({ itemsOf: (list) => get(note.list(list).items) }),
@@ -432,7 +594,8 @@
         {@render tool('Underline', 'U', () => chain().toggleUnderline().run(), active('underline'))}
         {@render tool('Strikethrough', 'S', () => chain().toggleStrike().run(), active('strike'))}
         {@render tool('Highlight', 'Mark', () => chain().toggleHighlight().run(), active('highlight'))}
-        {@render tool('Link', 'Link', toggleLinkField, active('link'))}
+        {@render tool('Link', 'Link', toggleLinkField, active('link') || !!noteLinkAt)}
+        {@render tool(copied ? 'Link copied' : 'Copy link', copied ? 'Copied' : 'Copy link', () => void copyLink())}
         {#if reminderHref}
             <a class="tool-link" href={reminderHref} title="Remind me about the selected text">Remind me</a>
         {:else}
@@ -538,9 +701,17 @@
             bind:this={linkInput}
             bind:value={linkUrl}
             type="text"
-            inputmode="url"
-            placeholder="https://"
-            aria-label="Link address; leave empty to remove the link"
+            inputmode={labelling ? 'text' : 'url'}
+            placeholder={labelling
+                ? linkText(
+                      { ...labelling.attrs, label: '' },
+                      index.entry(labelling.attrs.note),
+                      labelling.attrs.note === id,
+                  ).text
+                : 'https://'}
+            aria-label={labelling
+                ? "Link label; leave empty to show the note's title"
+                : 'Link address; leave empty to remove the link'}
             autocomplete="off"
             autocapitalize="off"
         />
@@ -549,13 +720,13 @@
 {/if}
 <div bind:this={host}></div>
 {#if typing && suggestions.length}
-    <TagSuggest
+    <Suggest
+        label={typingLink ? 'Notes to link to' : 'Tags already used'}
         items={suggestions}
         {picked}
         left={typing.left}
         top={typing.top}
         bottom={typing.bottom}
-        count={countOf}
-        onpick={pickTag}
+        onpick={(item) => pick(item as Choice)}
     />
 {/if}
