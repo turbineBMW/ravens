@@ -713,6 +713,31 @@
 .note-row .picture {
     object-fit: cover;
 }
+/* What an export or import did. */
+.report {
+    width: min(440px, 100vw - 16px);
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg);
+    color: var(--text);
+}
+.report::backdrop {
+    background: rgb(0 0 0 / 0.4);
+}
+.report h2 {
+    margin: 0 0 8px;
+    font-size: 1.1rem;
+}
+.report ul {
+    margin: 0 0 12px;
+    padding-left: 20px;
+}
+.actions-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
 /* Every attachment in the library. */
 .attachments-browser {
     width: min(900px, 100vw - 16px);

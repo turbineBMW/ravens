@@ -47,13 +47,27 @@
     function openElsewhere() {
         if (url) window.open(url, '_blank', 'noopener');
     }
+    /** Put away: said at once and once, since the dialog's own close event comes later. */
+    let closed = false;
+    function finish() {
+        if (closed) return;
+        closed = true;
+        if (dialog.open) dialog.close();
+        onclose();
+    }
     function onclick(event: MouseEvent) {
-        if (event.target === dialog) dialog.close();
+        if (event.target === dialog) finish();
     }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
-<dialog class="attachment-viewer viewer-{attrs.kind}" bind:this={dialog} {onclose} {onclick} aria-label={attrs.name}>
+<dialog
+    class="attachment-viewer viewer-{attrs.kind}"
+    bind:this={dialog}
+    onclose={finish}
+    {onclick}
+    aria-label={attrs.name}
+>
     <header class="viewer-bar">
         <span class="viewer-title">{attrs.name || 'Attachment'}</span>
         <span class="small muted">{attrs.size ? sizeText(attrs.size) : ''}</span>
@@ -61,9 +75,7 @@
         {#if attrs.kind === 'file' || attrs.kind === 'pdf'}
             <button class="btn" type="button" disabled={!url} onclick={openElsewhere}>Open in a new tab</button>
         {/if}
-        <button class="icon-btn" type="button" aria-label="Close" onclick={() => dialog.close()}
-            ><Icon name="close" /></button
-        >
+        <button class="icon-btn" type="button" aria-label="Close" onclick={finish}><Icon name="close" /></button>
     </header>
     <div class="viewer-body">
         {#if loading}

@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { unzipSync, strFromU8 } from 'fflate';
 
 const API_PORT = 18191;
 const OLD_CLIENT_PORT = 18192;
@@ -511,6 +512,148 @@ async function main() {
         return all.filter((a) => a.note === noteId).length === 3 && !all.some((a) => a.blob === small.blob);
     }, 'true');
 
+    // ---------- exporting a note, and importing it back ----------
+    // Downloads are caught as they're handed to the browser, as base64.
+    const catchDownloads = `(() => {
+        window.__downloads = [];
+        const click = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function () {
+            if (!this.download || !this.href.startsWith('blob:')) return click.call(this);
+            const name = this.download;
+            fetch(this.href).then((r) => r.arrayBuffer()).then((buf) => {
+                const bytes = new Uint8Array(buf);
+                let bin = '';
+                for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+                window.__downloads.push({ name, b64: btoa(bin) });
+            });
+        };
+        window.__pick = (b64, name, type) => {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            const input = document.querySelector('input[type=file][accept*=".md"]');
+            const dt = new DataTransfer();
+            dt.items.add(new File([bytes], name, { type }));
+            input.files = dt.files;
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+    })()`;
+    const download = async (target, count) => {
+        await until(target.js, `window.__downloads.length === ${count}`, 30_000);
+        return JSON.parse(await target.js(`JSON.stringify(window.__downloads[${count - 1}])`));
+    };
+    const reportTitle = `document.querySelector('.report[open] h2')?.textContent`;
+    await page.go(noteUrl);
+    await until(page.js, `document.querySelectorAll('.note-attachment').length === 3`);
+    await page.js(catchDownloads);
+    await page.js(`document.querySelector('[aria-label="Note actions"]').click()`);
+    await page.js(
+        `[...document.querySelectorAll('.editor-pane .menu .btn')].find((b) => b.textContent === 'Export as Markdown').click()`,
+    );
+    const exported = await download(page, 1);
+    assert.equal(exported.name, 'Inspection photos.zip');
+    const zipped = unzipSync(Buffer.from(exported.b64, 'base64'));
+    const md = strFromU8(zipped['Inspection photos.md']);
+    assert.match(md, /^# Inspection photos$/m, md);
+    assert.match(md, /!\[Blade root, teal\]\(attachments\/big\.png\)/, md);
+    assert.match(md, /\[manual\.pdf\]\(attachments\/manual\.pdf\)/, md);
+    assert.equal(zipped['attachments/big.png'].byteLength, big.size, 'the original, not the thumbnail');
+    assert.ok(zipped['attachments/manual.pdf'] && zipped['attachments/offline.png']);
+    // Exported Markdown, with its files, comes back as a note with the same attachments.
+    const before = new Set((await (await fetch(`${API}/attachments`)).json()).map((x) => x.note));
+    await page.js(`__pick(${JSON.stringify(exported.b64)}, 'Inspection photos.zip', 'application/zip')`);
+    await until(page.js, `${reportTitle} === 'Imported'`, 30_000);
+    assert.match(await page.js(`document.querySelector('.report[open]').textContent`), /1 note/);
+    await page.js(`document.querySelector('.report[open] button').click()`);
+    await until(
+        async () => {
+            const all = await (await fetch(`${API}/attachments`)).json();
+            const fresh = all.filter((x) => !before.has(x.note));
+            return (
+                fresh.length === 3 &&
+                fresh.every((x) => x.stored) &&
+                fresh
+                    .map((x) => x.kind)
+                    .sort()
+                    .join() === 'image,image,pdf'
+            );
+        },
+        'true',
+        40_000,
+    );
+    const imported = (await (await fetch(`${API}/attachments`)).json()).find((x) => !before.has(x.note));
+    assert.equal(imported.alt, 'Blade root, teal', 'alt text comes back from the image description');
+
+    // ---------- the whole library, into an empty one ----------
+    await page.js(`document.querySelector('[aria-label="Main menu"]').click()`);
+    await page.js(
+        `[...document.querySelectorAll('.primary-menu .btn')].find((b) => b.textContent.startsWith('Export library')).click()`,
+    );
+    const archive = await download(page, 2);
+    assert.match(archive.name, /^Huginn archive \d{4}-\d{2}-\d{2}\.zip$/);
+    await until(page.js, `${reportTitle} === 'Library exported'`);
+    assert.match(await page.js(`document.querySelector('.report[open]').textContent`), /2 notes and \d+ files/);
+    await page.js(`document.querySelector('.report[open] button').click()`);
+    const archived = unzipSync(Buffer.from(archive.b64, 'base64'));
+    const manifest = JSON.parse(strFromU8(archived['manifest.json']));
+    assert.equal(manifest.format, 'huginn-archive');
+    assert.equal(manifest.notes.length, 2);
+    assert.ok(Object.keys(archived).filter((k) => k.startsWith('files/')).length >= 6, 'attachments and thumbnails');
+    // Someone else's empty library, on a server of its own.
+    const ELSEWHERE = 18194;
+    const elsewhere = spawn('target/debug/huginn-server', {
+        stdio: 'ignore',
+        env: {
+            ...process.env,
+            RAVEN_DB_PATH: join(work, 'elsewhere.db'),
+            RAVEN_LISTEN_ADDR: `127.0.0.1:${ELSEWHERE}`,
+            RAVEN_DEV_USER: 'someone-else',
+            RAVEN_WEB_DIR: 'huginn/web/build',
+        },
+    });
+    try {
+        const there = `http://127.0.0.1:${ELSEWHERE}/huginn`;
+        await until(async () => (await fetch(`${there}/v1/health`).catch(() => null))?.ok, 'true');
+        const fresh = await device();
+        await fresh.size(1280);
+        await fresh.go(`${there}/`);
+        await until(fresh.js, `!!document.querySelector('[aria-label="Main menu"]')`);
+        assert.equal(await fresh.js(`document.querySelectorAll('.note-row').length`), 0, 'an empty library');
+        await fresh.js(catchDownloads);
+        await fresh.js(`__pick(${JSON.stringify(archive.b64)}, ${JSON.stringify(archive.name)}, 'application/zip')`);
+        await until(fresh.js, `${reportTitle} === 'Imported'`, 30_000);
+        assert.match(await fresh.js(`document.querySelector('.report[open]').textContent`), /2 notes and \d+ files/);
+        await fresh.js(`document.querySelector('.report[open] button').click()`);
+        await until(
+            fresh.js,
+            `[...document.querySelectorAll('.note-row strong')].filter((s) => s.textContent === 'Inspection photos').length === 2`,
+        );
+        await fresh.go(`${there}/n/${noteId}`);
+        await until(
+            fresh.js,
+            `[...document.querySelectorAll('.attachment-image img')].filter((i) => i.complete && i.naturalWidth > 0).length === 2 && !!document.querySelector('.attachment-pdf img.card-page')`,
+            30_000,
+        );
+        // Its files reach its own server, under its own person.
+        await until(
+            async () => {
+                const all = await (await fetch(`${there}/v1/attachments`)).json();
+                return all.length === 6 && all.every((x) => x.stored);
+            },
+            'true',
+            40_000,
+        );
+        // Importing it again changes nothing.
+        await fresh.go(`${there}/`);
+        await fresh.js(catchDownloads);
+        await fresh.js(`__pick(${JSON.stringify(archive.b64)}, ${JSON.stringify(archive.name)}, 'application/zip')`);
+        await until(fresh.js, `${reportTitle} === 'Imported'`, 30_000);
+        await sleep(1000);
+        assert.equal(await fresh.js(`document.querySelectorAll('.note-row').length`), 2, 'no duplicates');
+    } finally {
+        elsewhere.kill();
+    }
+
     // ---------- backing up and restoring, attachments included ----------
     const backup = join(work, 'backup.db');
     const backedUp = await new Promise((resolve) => {
@@ -556,7 +699,7 @@ async function main() {
 
     for (const [sessionId, errors] of pageErrors) assert.deepEqual(errors, [], `page errors in ${sessionId}`);
     console.log(
-        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, the attachments browser, deleting, backup and restore)',
+        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, the attachments browser, deleting, exporting and importing a note, the library into an empty one and again, backup and restore)',
     );
 }
 

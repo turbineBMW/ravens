@@ -13,6 +13,9 @@
     import PictureThumb from '$lib/PictureThumb.svelte';
     import { kindsByNote, libraryAttachments, refreshAttachments } from '$lib/attachments';
     import AttachmentsBrowser from '$lib/AttachmentsBrowser.svelte';
+    import { exportLibrary, importFiles } from '$lib/archive';
+    import { save } from '$lib/noteExport';
+    import Report from '$lib/Report.svelte';
     import { describe, matches, type Condition, type SmartFolder } from '$lib/smartFolders';
     import TagChip from '$lib/TagChip.svelte';
     import { filterByTag, refreshTags, tagFilter, tags, tagsFresh } from '$lib/tags';
@@ -212,6 +215,51 @@
         'No conditions';
     /** The Smart Folder being made or changed. */
     let browsing = $state(false);
+    // The library out and files in: what's happening, then what happened.
+    let working = $state('');
+    let report = $state<{ title: string; lines: string[] } | null>(null);
+    let importInput = $state<HTMLInputElement>();
+    async function exportAll() {
+        menu.open = false;
+        try {
+            const out = await exportLibrary(index, (text) => (working = text));
+            save({ name: out.name, bytes: out.bytes, type: 'application/zip' });
+            report = {
+                title: 'Library exported',
+                lines: [
+                    `${out.notes} ${out.notes === 1 ? 'note' : 'notes'} and ${out.files} ${out.files === 1 ? 'file' : 'files'}, in “${out.name}”.`,
+                    ...out.missing,
+                ],
+            };
+        } catch {
+            report = { title: 'Couldn’t export the library', lines: [] };
+        } finally {
+            working = '';
+        }
+    }
+    async function importPicked(input: HTMLInputElement) {
+        const files = [...(input.files ?? [])];
+        input.value = '';
+        if (!files.length) return;
+        try {
+            const out = await importFiles(index, files, (text) => (working = text));
+            report = {
+                title: out.notes || out.files ? 'Imported' : 'Nothing imported',
+                lines: [
+                    ...(out.notes || out.files
+                        ? [
+                              `${out.notes} ${out.notes === 1 ? 'note' : 'notes'}${out.files ? ` and ${out.files} ${out.files === 1 ? 'file' : 'files'}` : ''}.`,
+                          ]
+                        : []),
+                    ...out.lost,
+                ],
+            };
+        } catch {
+            report = { title: 'Couldn’t import that', lines: [] };
+        } finally {
+            working = '';
+        }
+    }
     let editingSmart = $state<{ folder: SmartFolder | null; draft?: Condition[] } | null>(null);
     function saveFilter() {
         editingSmart = {
@@ -439,6 +487,8 @@
                         browsing = true;
                     }}>Attachments…</button
                 >
+                <button class="btn" type="button" onclick={() => importInput?.click()}>Import…</button>
+                <button class="btn" type="button" onclick={() => void exportAll()}>Export library…</button>
                 <button class="btn" type="button" aria-current={trash} onclick={() => choose({ kind: 'trash' })}>
                     Recently Deleted <span class="muted">{deleted.length + deletedFolders.length}</span>
                 </button>
@@ -672,6 +722,21 @@
             <button class="btn danger" type="button" disabled={!chosen.length} onclick={deleteChosen}>Delete</button>
         {/if}
     </div>
+{/if}
+<input
+    bind:this={importInput}
+    type="file"
+    multiple
+    hidden
+    accept=".md,.markdown,.txt,.zip,text/markdown,text/plain,application/zip"
+    onchange={(e) => {
+        menu.open = false;
+        void importPicked(e.currentTarget);
+    }}
+/>
+{#if working}<p class="small muted library-hint" role="status">{working}</p>{/if}
+{#if report}
+    <Report title={report.title} lines={report.lines} onclose={() => (report = null)} />
 {/if}
 {#if browsing}
     <AttachmentsBrowser {index} onclose={() => (browsing = false)} />

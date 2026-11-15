@@ -48,8 +48,17 @@
         (a.kind === 'link' ? a.url?.replace(/^https?:\/\/(www\.)?/, '') : a.name) || 'Untitled';
     const pictureOf = (a: AttachmentInfo) => a.thumb || (a.kind === 'image' ? a.blob : '');
 
+    /** Put away: said at once and once, since the dialog's own close event comes later. */
+    let closed = false;
+    function finish() {
+        if (closed) return;
+        closed = true;
+        if (dialog.open) dialog.close();
+        onclose();
+    }
+
     function open(a: AttachmentInfo) {
-        dialog.close();
+        finish();
         void goto(`${noteHref(a.note, { kind: 'all' })}#attachment-${a.blob}`);
     }
 
@@ -59,12 +68,10 @@
     });
 </script>
 
-<dialog class="attachments-browser" bind:this={dialog} {onclose} aria-label="Attachments">
+<dialog class="attachments-browser" bind:this={dialog} onclose={finish} aria-label="Attachments">
     <header class="viewer-bar">
         <span class="viewer-title">Attachments</span>
-        <button class="icon-btn" type="button" aria-label="Close" onclick={() => dialog.close()}
-            ><Icon name="close" /></button
-        >
+        <button class="icon-btn" type="button" aria-label="Close" onclick={finish}><Icon name="close" /></button>
     </header>
     <div class="browser-tools">
         <input type="search" placeholder="Find by name" aria-label="Find attachments by name" bind:value={query} />
