@@ -511,9 +511,52 @@ async function main() {
         return all.filter((a) => a.note === noteId).length === 3 && !all.some((a) => a.blob === small.blob);
     }, 'true');
 
+    // ---------- backing up and restoring, attachments included ----------
+    const backup = join(work, 'backup.db');
+    const backedUp = await new Promise((resolve) => {
+        const run = spawn('python3', [
+            'scripts/backup-db.py',
+            join(work, 'test.db'),
+            backup,
+            '--blobs',
+            join(work, 'blobs'),
+        ]);
+        let out = '';
+        run.stdout.on('data', (d) => (out += d));
+        run.stderr.on('data', (d) => (out += d));
+        run.on('close', (code) => resolve({ code, out }));
+    });
+    assert.equal(backedUp.code, 0, backedUp.out);
+    assert.match(backedUp.out, /Attachments: \d+ copied and verified/);
+    const RESTORED = 18193;
+    const restored = spawn('target/debug/huginn-server', {
+        stdio: 'ignore',
+        env: {
+            ...process.env,
+            RAVEN_DB_PATH: backup,
+            RAVEN_BLOB_DIR: `${backup}.blobs`,
+            RAVEN_LISTEN_ADDR: `127.0.0.1:${RESTORED}`,
+            RAVEN_DEV_USER: 'browser-test',
+        },
+    });
+    try {
+        const there = `http://127.0.0.1:${RESTORED}/huginn/v1`;
+        await until(async () => (await fetch(`${there}/health`).catch(() => null))?.ok, 'true');
+        const before = (await (await fetch(`${API}/attachments`)).json()).filter((x) => x.note === noteId);
+        const after = (await (await fetch(`${there}/attachments`)).json()).filter((x) => x.note === noteId);
+        assert.deepEqual(after, before, 'the restored server lists the same attachments');
+        for (const x of after) {
+            const want = Buffer.from(await (await fetch(`${API}/blobs/${x.blob}`)).arrayBuffer());
+            const got = Buffer.from(await (await fetch(`${there}/blobs/${x.blob}`)).arrayBuffer());
+            assert.ok(got.equals(want), `${x.name} restored byte for byte`);
+        }
+    } finally {
+        restored.kill();
+    }
+
     for (const [sessionId, errors] of pageErrors) assert.deepEqual(errors, [], `page errors in ${sessionId}`);
     console.log(
-        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, the attachments browser, deleting)',
+        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, the attachments browser, deleting, backup and restore)',
     );
 }
 
