@@ -148,8 +148,13 @@
     padding: 6px 14px;
 }
 /* The sidebar is never narrower than 280px, so this always fits inside it. */
-.primary-menu .sheet {
+.primary-menu .sheet,
+.folder-menu .sheet {
     width: 264px;
+}
+/* A folder's menu opens over the rows below it. */
+.folder-menu .sheet {
+    z-index: 10;
 }
 .btn.danger {
     color: var(--danger);
@@ -732,9 +737,13 @@ main.workspace {
     padding: 0 8px calc(8px + env(safe-area-inset-bottom));
 }
 .library-search {
+    display: flex;
+    gap: 6px;
     padding: 4px 0 8px;
 }
 .library-search input {
+    flex: 1;
+    min-width: 0;
     width: 100%;
     min-height: var(--tap);
     border: none;
@@ -744,6 +753,8 @@ main.workspace {
 }
 .note-row {
     display: flex;
+    /* Inside folders in the tree: one step per folder. */
+    margin-left: calc(var(--depth, 0) * 24px);
     margin-bottom: 2px;
     border-radius: var(--radius);
 }
@@ -796,6 +807,124 @@ main.workspace {
     border-radius: 3px;
     background: color-mix(in srgb, var(--accent) 30%, transparent);
     color: var(--text);
+}
+/* A folder in the list's tree: an arrow to collapse or expand it, and its name to open it. */
+.folder-node {
+    display: flex;
+    align-items: center;
+    margin: 0 0 2px calc(var(--depth, 0) * 24px);
+    border-radius: var(--radius);
+}
+.folder-node:hover {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.folder-label {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: var(--tap);
+    align-items: center;
+    gap: 10px;
+    padding: 0 8px 0 14px;
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+.folder-label .folder-name {
+    flex: 1;
+}
+.folder-label .icon {
+    flex: none;
+    color: var(--muted);
+    transition: transform 0.15s;
+}
+.folder-label[aria-expanded='true'] .icon {
+    transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+    .folder-label .icon {
+        transition: none;
+    }
+}
+/* Folders: forms for naming one, and choosing where things go. */
+.folder-name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.folder-form {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 4px;
+    padding: 4px;
+}
+.folder-form input {
+    min-width: 0;
+    min-height: var(--tap);
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.folder-picker {
+    display: grid;
+    gap: 2px;
+}
+.folder-picker .btn {
+    justify-content: flex-start;
+    border-color: transparent;
+    background: transparent;
+}
+.folder-picker .btn:not(:disabled):hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.folder-picker .btn[aria-current='true'] {
+    font-weight: 600;
+}
+.folder-row {
+    align-items: center;
+    gap: 8px;
+    padding: 10px 8px 10px 12px;
+}
+/* Selecting several notes: a checkbox on each row, and what to do with them below. */
+.select-toggle {
+    flex: none;
+}
+.note-select {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+}
+.note-select input {
+    flex: none;
+    width: 20px;
+    height: 20px;
+}
+.selection-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    max-height: 50dvh;
+    overflow: auto;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: var(--sidebar);
+}
+.selection-bar > span {
+    flex: 1;
+}
+.selection-bar .folder-picker {
+    flex-basis: 100%;
 }
 .pin-button {
     align-self: center;

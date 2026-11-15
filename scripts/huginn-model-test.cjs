@@ -20,15 +20,27 @@ const sync = {
         },
     }),
 };
-const compiled = ts.transpileModule(fs.readFileSync('huginn/web/src/lib/notes.ts', 'utf8'), {
-    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText;
-const model = { exports: {} };
-new Function('require', 'exports', compiled)((name) => {
+// The client's modules, compiled as they're needed, each once.
+const libs = new Map();
+function lib(name) {
+    if (!libs.has(name)) {
+        const module = { exports: {} };
+        libs.set(name, module);
+        const source = fs.readFileSync(`huginn/web/src/lib/${name}.ts`, 'utf8');
+        const compiled = ts.transpileModule(source, {
+            compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+        }).outputText;
+        new Function('require', 'exports', compiled)(resolve, module.exports);
+    }
+    return libs.get(name).exports;
+}
+function resolve(name) {
     if (name === '$app/paths') return { base: '/huginn' };
     if (name === '@ravens/ui/sync') return sync;
+    if (name.startsWith('$lib/')) return lib(name.slice('$lib/'.length));
     return require(name);
-}, model.exports);
+}
+const model = { exports: lib('notes') };
 const {
     NOTE_FORMAT,
     INK_STRIDE,
@@ -43,14 +55,7 @@ const {
     openNote,
     sortItems,
 } = model.exports;
-const geometry = { exports: {} };
-new Function(
-    'require',
-    'exports',
-    ts.transpileModule(fs.readFileSync('huginn/web/src/lib/ink.ts', 'utf8'), {
-        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-    }).outputText,
-)((name) => (name === '$lib/notes' ? model.exports : require(name)), geometry.exports);
+const geometry = { exports: lib('ink') };
 {
     const { ERASER_RADIUS, eraseFrom, resample, touches } = geometry.exports;
     // A straight pen stroke from x 0 to 300 at y 100, with only its two ends sampled.
@@ -635,6 +640,106 @@ assert.equal(entry(sketchId).sketch, null, 'erasing the drawing clears its thumb
 assert.equal(entry(freshId).sketch, null, 'a note without a drawing has none');
 otherDevice.destroy();
 
+{
+    // Folders as shown: by name, subfolders under their folder, nothing lost when changes cross.
+    const { folderPath, folderTree, shownFolder, within } = lib('folders');
+    const f = (id, parent = '', extra = {}) => ({
+        id,
+        name: id.toUpperCase(),
+        parent,
+        created: 0,
+        deletedAt: 0,
+        deletedWith: '',
+        ...extra,
+    });
+    const rows = (all) => folderTree(all).map((r) => [r.folder.id, r.depth]);
+    const all = [f('b'), f('a'), f('a2', 'a'), f('a1', 'a'), f('x', 'gone'), f('gone', '', { deletedAt: 1 })];
+    assert.deepEqual(rows(all), [
+        ['a', 0],
+        ['a1', 1],
+        ['a2', 1],
+        ['b', 0],
+        ['x', 0],
+    ]);
+    assert.deepEqual([...within(all, 'a')].sort(), ['a', 'a1', 'a2'], 'a folder and the folders in it');
+    assert.equal(within(all, 'gone').size, 0, 'a deleted folder holds nothing');
+    assert.equal(folderPath(all, 'a2'), 'A › A2');
+    assert.equal(folderPath(all, 'x'), 'X', 'a folder whose parent is gone is at the top level');
+    // Two devices moving folders into each other: the lowest id goes to the top, everywhere.
+    assert.deepEqual(rows([f('d', 'c'), f('c', 'd')]), [
+        ['c', 0],
+        ['d', 1],
+    ]);
+    assert.deepEqual(rows([f('e', 'c'), f('d', 'c'), f('c', 'd')]), [
+        ['c', 0],
+        ['d', 1],
+        ['e', 1],
+    ]);
+    assert.deepEqual(rows([f('s', 's')]), [['s', 0]], 'nor in itself');
+    const numbered = [f('n10', '', { name: 'Item 10' }), f('n9', '', { name: 'item 9' })];
+    assert.deepEqual(rows(numbered), [
+        ['n9', 0],
+        ['n10', 0],
+    ]);
+    const live = new Set(['a']);
+    assert.equal(shownFolder('a', live), 'a');
+    assert.equal(shownFolder('gone', live), '', 'a note whose folder is gone shows at the top level');
+}
+{
+    // Folders in the index: notes in them, moving, deleting with everything in it, and restoring.
+    const meta = (id) => get(index.notes).find((n) => n.id === id);
+    const folder = (id) => get(index.folders).find((f) => f.id === id);
+    const work = index.createFolder('Work', '');
+    const turbines = index.createFolder('Turbines', work);
+    assert.equal(folder(turbines).parent, work);
+    const inside = index.create('text', turbines);
+    const loose = index.create('text');
+    const elsewhere = index.create('text');
+    index.remove(elsewhere);
+    assert.equal(meta(inside).folder, turbines, 'a new note goes in the folder being viewed');
+    assert.equal(meta(loose).folder, '');
+    const updated = meta(loose).updated;
+    index.moveNotes([loose, elsewhere], work);
+    assert.equal(meta(loose).folder, work);
+    assert.equal(meta(loose).updated, updated, 'moving a note does not reorder the list');
+    index.moveFolder(work, turbines);
+    assert.equal(folder(work).parent, '', 'a folder never moves into a folder inside it');
+    index.renameFolder(turbines, 'Blades');
+    assert.equal(folder(turbines).name, 'Blades');
+
+    index.deleteFolder(work);
+    for (const id of [work, turbines]) {
+        assert.ok(folder(id).deletedAt > 0 && folder(id).deletedWith === work, 'the folder and the one in it go');
+    }
+    for (const id of [inside, loose]) {
+        assert.ok(meta(id).deletedAt > 0 && meta(id).deletedWith === work, 'and so do their notes');
+    }
+    assert.equal(meta(elsewhere).deletedWith, '', 'a note already deleted keeps how it was deleted');
+    index.restore(loose);
+    assert.equal(meta(loose).deletedAt, 0);
+    assert.equal(meta(loose).deletedWith, '');
+    index.restoreFolder(work);
+    assert.ok(!folder(work).deletedAt && !folder(turbines).deletedAt && folder(turbines).parent === work);
+    assert.equal(meta(inside).deletedAt, 0, 'restoring the folder brings back its notes');
+    assert.equal(meta(loose).folder, work, 'a note restored on its own is back in its folder too');
+    assert.ok(meta(elsewhere).deletedAt > 0, 'but not one deleted before the folder was');
+
+    // Offline on both: this device moves a note into a folder the other deletes. It stays visible.
+    const other = new Y.Doc();
+    Y.applyUpdate(other, Y.encodeStateAsUpdate(index.doc.doc));
+    other.getMap('folders').get(turbines).set('deletedAt', 1);
+    index.moveNotes([loose], turbines);
+    Y.applyUpdate(index.doc.doc, Y.encodeStateAsUpdate(other));
+    const liveIds = new Set(
+        get(index.folders)
+            .filter((f) => !f.deletedAt)
+            .map((f) => f.id),
+    );
+    assert.equal(meta(loose).deletedAt, 0);
+    assert.equal(lib('folders').shownFolder(meta(loose).folder, liveIds), '', 'it shows at the top level');
+    other.destroy();
+}
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
@@ -661,7 +766,7 @@ newer.ink('strokes:refused').setPaper('grid');
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

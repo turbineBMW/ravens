@@ -1,12 +1,12 @@
 <script lang="ts">
     import { getContext, onMount } from 'svelte';
     import { goto } from '$app/navigation';
-    import { base } from '$app/paths';
     import { page } from '$app/state';
     import EditorBar from '$lib/EditorBar.svelte';
     import NoteEditor from '$lib/NoteEditor.svelte';
     import NoteSession from '$lib/NoteSession.svelte';
     import { type Index } from '$lib/notes';
+    import { listHref, noteHref, scopeOf } from '$lib/scope';
 
     const index = getContext<Index>('index');
     const notes = index.notes;
@@ -14,7 +14,8 @@
     let ready = $state(false);
     let loadError = $state(false);
     const entry = $derived($notes.find((n) => n.id === page.params.id));
-    const back = $derived(`${base}/${page.url.searchParams.get('view') === 'trash' ? '?view=trash' : ''}`);
+    const scope = $derived(scopeOf(page.url));
+    const back = $derived(listHref(scope));
     onMount(() => {
         void index.doc.whenLocal.then(
             () => {
@@ -29,7 +30,7 @@
     function deleteList() {
         if (!entry) return;
         index.remove(entry.id);
-        void goto(`${base}/`);
+        void goto(back);
     }
 </script>
 
@@ -56,7 +57,7 @@
                     onclick={() => {
                         if (entry) {
                             index.restore(entry.id);
-                            void goto(`${base}/n/${entry.id}`);
+                            void goto(noteHref(entry.id, { kind: 'all' }));
                         }
                     }}>Restore note</button
                 >
