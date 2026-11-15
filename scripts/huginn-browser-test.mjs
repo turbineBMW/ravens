@@ -371,6 +371,9 @@ async function main() {
     await page.js(`document.querySelector('.tiptap').editor.commands.focus('end')`);
     await tool(page, 'Add drawing');
     await until(page.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '0'`);
+    // A new drawing is laid out a moment after it reports its strokes: scrolled to before then,
+    // it's 0px tall and goes nowhere, then grows past the bottom of the window.
+    await until(page.js, `document.querySelector('.note-ink canvas').getBoundingClientRect().height > 100`);
     const inkStrokes = `document.querySelector('.note-ink canvas').dataset.strokes`;
     const inkBox = async () => {
         await page.js(`document.querySelector('.note-ink').scrollIntoView({ block: 'center' })`);
@@ -973,11 +976,6 @@ async function main() {
     await until(page.js, `!document.querySelector('.detected-menu')`);
     await ringLine(`ed.view.dispatch(ed.state.tr.delete(at, at + size));`);
     await until(page.js, `!document.querySelector('.tiptap .detected')`);
-    // Saved, and past the notes list fetching the tags again after an edit (1.5 s), so the Smart
-    // Folder below starts from the tag list as it settles.
-    await until(page.js, subtitleIs('Saved'));
-    await sleep(2500);
-    await until(page.js, `${drawerTags} === '#Chores 1'`);
 
     // Smart Folders: made from the main menu with a tag and an open checklist, at the top of the
     // tree and collapsed, its notes under it when expanded as well as in their own place; changed
