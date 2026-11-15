@@ -8,6 +8,8 @@
     import { childFolders, folderPath, folderTree, shownFolder, shownParents, within, type Folder } from '$lib/folders';
     import Icon from '$lib/Icon.svelte';
     import SketchThumb from '$lib/SketchThumb.svelte';
+    import TagChip from '$lib/TagChip.svelte';
+    import { filterByTag, refreshTags, tagFilter, tags, tagsFresh } from '$lib/tags';
     import { MIN_SEARCH, searchNotes, snippetParts, type SearchHit } from '$lib/search';
     import { listHref, noteHref, scopeOf, type Scope } from '$lib/scope';
     import { openNote, type Index, type NoteMeta } from '$lib/notes';
@@ -99,6 +101,26 @@
     );
     const inScope = (n: NoteMeta, s: Scope) => (s.kind === 'trash' ? !!n.deletedAt : !n.deletedAt);
 
+    // Tags, from the server (cached here for offline): what the drawer lists and the list filters by.
+    const tagNotes = $derived(new Map($tags.map((t) => [t.tag, new Set(t.notes)])));
+    const activeIds = $derived(new Set(active.map((n) => n.id)));
+    const shownTags = $derived(
+        $tags
+            .map((t) => ({ ...t, count: t.notes.filter((id) => activeIds.has(id)).length }))
+            .filter((t) => t.count > 0),
+    );
+    const filtering = $derived($tagFilter.include.length + $tagFilter.exclude.length > 0);
+    /** A note has every tag the filter includes and none it excludes. */
+    const passes = (n: NoteMeta) =>
+        $tagFilter.include.every((t) => tagNotes.get(t)?.has(n.id)) &&
+        !$tagFilter.exclude.some((t) => tagNotes.get(t)?.has(n.id));
+    // Notes change their tags as they're edited, here or elsewhere: fetch them again shortly after.
+    $effect(() => {
+        void $notes;
+        const timer = setTimeout(() => void refreshTags(), 1500);
+        return () => clearTimeout(timer);
+    });
+
     // Titles match here, at once and offline; note text matches on the server.
     let hits = $state<Map<string, SearchHit> | null>(null);
     let textSearch = $state<'off' | 'done' | 'unavailable'>('off');
@@ -131,7 +153,7 @@
     /** Title matches first, then notes whose text matches, most relevant first. */
     const visible = $derived.by(() => {
         const q = query.trim().toLocaleLowerCase();
-        const pool = $notes.filter((n) => inScope(n, scope));
+        const pool = $notes.filter((n) => inScope(n, scope) && (!filtering || passes(n)));
         if (!q) return pool;
         const byTitle = pool.filter((n) => (n.title || 'New note').toLocaleLowerCase().includes(q));
         if (!hits) return byTitle;
@@ -142,7 +164,7 @@
     });
     type Row = { kind: 'folder'; folder: Folder; depth: number } | { kind: 'note'; note: NoteMeta; depth: number };
     /** The list as a tree of folders and notes, unless it's search results or Recently Deleted. */
-    const asTree = $derived(!trash && !query.trim());
+    const asTree = $derived(!trash && !query.trim() && !filtering);
     const rows = $derived.by((): Row[] => {
         if (!asTree) return visible.map((note) => ({ kind: 'note', note, depth: 0 }));
         const out: Row[] = [];
@@ -332,6 +354,29 @@
                 <button class="btn" type="button" aria-current={trash} onclick={() => choose({ kind: 'trash' })}>
                     Recently Deleted <span class="muted">{deleted.length + deletedFolders.length}</span>
                 </button>
+                {#if shownTags.length}
+                    <hr />
+                    <p class="small muted menu-note">
+                        Tags{$tagsFresh ? '' : ' · as of the last connection'}
+                    </p>
+                    <nav class="tag-list" aria-label="Tags">
+                        {#each shownTags as t (t.tag)}
+                            <button
+                                class="btn"
+                                type="button"
+                                aria-current={$tagFilter.include.includes(t.tag)}
+                                onclick={() => {
+                                    filterByTag(t.tag);
+                                    menu.open = false;
+                                    if (trash) choose({ kind: 'all' });
+                                }}
+                            >
+                                <span class="folder-name">#{t.name}</span>
+                                <span class="muted">{t.count}</span>
+                            </button>
+                        {/each}
+                    </nav>
+                {/if}
                 <hr />
                 {@render settings()}
             </div>
@@ -351,6 +396,19 @@
             >
         {/if}
     </div>
+    {#if filtering}
+        <div class="tag-filter" role="group" aria-label="Tag filter">
+            {#each $tagFilter.include as t (t)}
+                <TagChip {index} tag={t} info={$tags.find((i) => i.tag === t)} excluded={false} />
+            {/each}
+            {#each $tagFilter.exclude as t (t)}
+                <TagChip {index} tag={t} info={$tags.find((i) => i.tag === t)} excluded />
+            {/each}
+            <button class="btn clear-filter" type="button" onclick={() => tagFilter.set({ include: [], exclude: [] })}
+                >Clear</button
+            >
+        </div>
+    {/if}
     {#if textSearch === 'unavailable'}<p class="library-hint muted small" role="status">
             Searching titles only. Note text is searched when connected.
         </p>{/if}
@@ -464,20 +522,24 @@
             {:else}
                 <div class="library-empty">
                     <p>
-                        {query
-                            ? textSearch === 'done'
-                                ? 'No matching notes'
-                                : 'No matching titles'
-                            : trash
-                              ? deletedFolders.length
-                                  ? 'No other deleted notes'
-                                  : 'No deleted notes'
-                              : tree.length
-                                ? 'No notes yet'
-                                : 'No notes on this device yet'}
+                        {filtering && !query
+                            ? 'No notes with these tags'
+                            : query
+                              ? textSearch === 'done'
+                                  ? 'No matching notes'
+                                  : 'No matching titles'
+                              : trash
+                                ? deletedFolders.length
+                                    ? 'No other deleted notes'
+                                    : 'No deleted notes'
+                                : tree.length
+                                  ? 'No notes yet'
+                                  : 'No notes on this device yet'}
                     </p>
-                    {#if !trash && !query}<button class="btn primary" type="button" onclick={() => create()}
-                            >New note</button
+                    {#if !trash && !query && !filtering}<button
+                            class="btn primary"
+                            type="button"
+                            onclick={() => create()}>New note</button
                         >{/if}
                     {#if !$synced}<p class="small muted">Connect to load notes from your other devices.</p>{/if}
                 </div>

@@ -17,7 +17,7 @@ use yrs::types::xml::{Xml, XmlElementRef, XmlFragment, XmlOut};
 use yrs::{GetString, Map, ReadTxn, Transact};
 
 /// Raise this when `lines` changes: startup then indexes every note again.
-pub const VERSION: i64 = 1;
+pub const VERSION: i64 = 2;
 /// The checklist a format 1 note has, and a checklist block's default.
 const FIRST_LIST: &str = "items";
 /// At most this many notes in one search's results.
@@ -147,8 +147,8 @@ pub fn on_change(key: &DocKey, txn: &yrs::TransactionMut, conn: &Connection) {
     }
 }
 
-/// Replace a note's lines, unless they're unchanged (a drawing, say, or a
-/// checkbox), and record it as indexed.
+/// Replace a note's lines and tags, unless they're unchanged (a drawing, say,
+/// or a checkbox), and record it as indexed.
 pub fn index_note<T: ReadTxn>(
     owner: &str,
     note: &str,
@@ -180,6 +180,7 @@ pub fn index_note<T: ReadTxn>(
             insert.execute(params![owner, note, line.section, line.text])?;
         }
     }
+    crate::tags::store(&tx, owner, note, &crate::tags::note_tags(&now))?;
     tx.execute(
         "INSERT INTO note_search_state (owner, note_id, version) VALUES (?1, ?2, ?3)
          ON CONFLICT (owner, note_id) DO UPDATE SET version = excluded.version",

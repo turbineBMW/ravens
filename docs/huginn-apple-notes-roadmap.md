@@ -4,7 +4,7 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 14, 2026, at `52b12eb`:
+As of November 15, 2026, at `b622de9`:
 
 | Phase | State |
 | --- | --- |
@@ -12,7 +12,7 @@ As of November 14, 2026, at `52b12eb`:
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
 | P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders are next. See [Phase 3](#phase-3--organization-and-finding-things). |
 | P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -270,7 +270,11 @@ A first version had a folder view (`?folder=<id>`) that the list narrowed to, wi
 
 **Surface Pro 11, November 14, 2026, deployed to the mini:** passed.
 
-Still to do in this phase: tags and Smart Folders, find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
+**Third increment, PR #18:** tags are written in the text, `#like-this`, as in Apple Notes, so they're a projection of the content (as decision 4 above asks) rather than a separate field. The rule, the same in `tags.rs` and `tags.ts`: `#` at the start of a line or after a space or an opening bracket, then letters, digits, `_` and `-` (at most 64, a trailing `-` or `_` dropped), with at least one letter, so `#1`, `C#` and `example.com/#anchor` aren't tags; case doesn't matter. The server mirrors each note's tags into `note_tags` with its search lines (the extraction's `VERSION` is 2, so startup re-indexes every note and finds the tags already written), and `GET /v1/tags` lists them with their notes; each device caches that list, so the drawer and filter work offline as of the last connection. The editor shows tags in the accent colour, and clicking one filters the notes list, when it's in view beside the note; the caret still moves there, so a tag can be edited. Typing a tag suggests the tags already used, under the caret (above it when there's no room below, as over a phone's keyboard): right after `#` the most used, then those starting with what's typed and those containing it, at most six; arrows move, Enter or Tab fills in the whole tag and a space, Escape puts them away for that tag, and a click or tap picks one without taking the keyboard away. The main menu lists the tags with their counts. A filter is a row of chips above the list: notes must have every tag shown and none of those marked *not*; a chip's menu switches it between the two, renames or deletes the tag, or takes it out of the filter, and while filtering the list is flat, with each note's folder shown. Renaming or deleting a tag edits every note written with it on this device, fetching any not here, as typing would: each word keeps its formatting, the edit is on no editor's undo stack, and the notes keep their place in the list. Deleting keeps the word and drops the `#`. Notes that can't be reached in 15 seconds are counted and keep the old tag, to be done again when connected. No format change.
+
+**Surface Pro 11, November 15, 2026, deployed to the mini:** passed, suggestions included.
+
+Still to do in this phase: Smart Folders, find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
 
 ### Phase 4 — Attachments, capture, and portability
 

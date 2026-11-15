@@ -14,13 +14,16 @@
     import { NodeSelection, TextSelection } from '@tiptap/pm/state';
     import StarterKit from '@tiptap/starter-kit';
     import { ySyncPluginKey } from '@tiptap/y-tiptap';
-    import { mount, onMount, unmount } from 'svelte';
+    import { getContext, mount, onMount, unmount } from 'svelte';
     import * as Y from 'yjs';
     import ChecklistBlock from '$lib/ChecklistBlock.svelte';
     import InkBlock from '$lib/InkBlock.svelte';
     import { remindMeHref } from '$lib/links';
     import { Sections, revealSection, sectionAt } from '$lib/sections';
-    import type { Note } from '$lib/notes';
+    import { Hashtags, type TypedTag } from '$lib/hashtags';
+    import TagSuggest from '$lib/TagSuggest.svelte';
+    import { filterByTag, suggestTags, tags, type TagInfo } from '$lib/tags';
+    import type { Index, Note } from '$lib/notes';
 
     let { note, id }: { note: Note; id: string } = $props();
 
@@ -32,6 +35,57 @@
         if (editor && target.startsWith('section-')) revealSection(editor.view, target.slice('section-'.length));
     }
     let editor = $state.raw<Editor | null>(null);
+
+    // Suggesting the tags already used while one is typed.
+    const libraryNotes = getContext<Index>('index').notes;
+    const liveNotes = $derived(new Set($libraryNotes.filter((n) => !n.deletedAt).map((n) => n.id)));
+    const countOf = (t: TagInfo) => t.notes.filter((id) => liveNotes.has(id)).length;
+    let typing = $state<(TypedTag & { left: number; top: number; bottom: number }) | null>(null);
+    /** The tag whose suggestions Escape put away, by where its `#` is. */
+    let dismissed = $state<number | null>(null);
+    let picked = $state(0);
+    const suggestions = $derived(
+        typing && typing.from !== dismissed
+            ? suggestTags($tags, typing.typed, countOf).filter((t) => t.name !== typing!.typed)
+            : [],
+    );
+    function onTyping(next: typeof typing) {
+        if (!next || next.from !== dismissed) dismissed = null;
+        if (next?.typed !== typing?.typed) picked = 0;
+        typing = next;
+    }
+    function onKey(event: KeyboardEvent): boolean {
+        const n = suggestions.length;
+        if (!n || event.altKey || event.ctrlKey || event.metaKey) return false;
+        if (event.key === 'ArrowDown') picked = (picked + 1) % n;
+        else if (event.key === 'ArrowUp') picked = (picked - 1 + n) % n;
+        else if (event.key === 'Enter' || event.key === 'Tab') pickTag(suggestions[picked]);
+        else if (event.key === 'Escape') dismissed = typing?.from ?? null;
+        else return false;
+        return true;
+    }
+    /** Fill in the whole tag, and a space after it unless one's there. */
+    function pickTag(tag: TagInfo) {
+        if (!editor || !typing) return;
+        const { from, to } = typing;
+        const next = editor.state.doc.textBetween(
+            to,
+            Math.min(to + 1, editor.state.doc.content.size),
+            undefined,
+            '\ufffc',
+        );
+        editor
+            .chain()
+            .focus()
+            .insertContentAt({ from, to }, `#${tag.name}${/\s/u.test(next) ? '' : ' '}`)
+            .run();
+    }
+    /** Keep the suggestions under the tag as the note scrolls. */
+    function follow() {
+        if (!typing || !editor) return;
+        const { left, top, bottom } = editor.view.coordsAtPos(typing.from);
+        typing = { ...typing, left, top, bottom };
+    }
     // Toolbar state is read from the editor, so redraw it on every change.
     let revision = $state(0);
     let linkOpen = $state(false);
@@ -181,6 +235,15 @@
                 Checklist,
                 Ink,
                 Sections.configure({ noteId: id }),
+                // A tag filters the notes list, when the list is in view beside the note.
+                Hashtags.configure({
+                    onTag: (tag) => {
+                        if ((document.querySelector('.notes-pane') as HTMLElement | null)?.offsetParent)
+                            filterByTag(tag);
+                    },
+                    onTyping,
+                    onKey,
+                }),
                 Collaboration.configure({ fragment: note.body, yUndoOptions: { undoManager: undo } }),
             ],
             onTransaction: () => revision++,
@@ -189,12 +252,16 @@
         revealLinkedSection();
         // Following a link to another section of this note may only change the hash.
         addEventListener('hashchange', revealLinkedSection);
+        addEventListener('scroll', follow, true);
+        addEventListener('resize', follow);
         // Only a blank note takes focus: opening an existing one must not raise a phone's keyboard.
         if (created.isEmpty && !created.state.doc.firstChild?.type.name.startsWith('checklist')) {
             created.commands.focus('start');
         }
         return () => {
             removeEventListener('hashchange', revealLinkedSection);
+            removeEventListener('scroll', follow, true);
+            removeEventListener('resize', follow);
             created.destroy();
             undo.destroy();
             editor = null;
@@ -306,3 +373,14 @@
     </form>
 {/if}
 <div bind:this={host}></div>
+{#if typing && suggestions.length}
+    <TagSuggest
+        items={suggestions}
+        {picked}
+        left={typing.left}
+        top={typing.top}
+        bottom={typing.bottom}
+        count={countOf}
+        onpick={pickTag}
+    />
+{/if}

@@ -37,6 +37,7 @@ function lib(name) {
 function resolve(name) {
     if (name === '$app/paths') return { base: '/huginn' };
     if (name === '@ravens/ui/sync') return sync;
+    if (name === '@ravens/ui/api') return { createApi: () => ({ request: async () => [] }) };
     if (name.startsWith('$lib/')) return lib(name.slice('$lib/'.length));
     return require(name);
 }
@@ -740,6 +741,95 @@ otherDevice.destroy();
     other.destroy();
 }
 
+{
+    // Tags: the same cases as the server's tags.rs, which must agree.
+    const { cleanTag, retag, tagMatches } = lib('tags');
+    const names = (text) => tagMatches(text).map((m) => m.name);
+    const cases = [
+        ['#work', ['work']],
+        ['Plan for #Turbines and #blade-inspection.', ['Turbines', 'blade-inspection']],
+        ['(#q3) [#café] {#x_y}', ['q3', 'café', 'x_y']],
+        ['#trailing- #under_', ['trailing', 'under']],
+        ['issue #1, year #2026, rev #2b', ['2b']],
+        ['mail me@host#tag, url example.com/#anchor, C#', []],
+        ['##double #', []],
+        ['#a#b', ['a']],
+        [`#${'a'.repeat(65)}`, []],
+        [`#${'a'.repeat(64)}`, ['a'.repeat(64)]],
+    ];
+    for (const [text, want] of cases) assert.deepEqual(names(text), want, text);
+    assert.deepEqual(
+        tagMatches('x #😀a #b').map((m) => m.at),
+        [7],
+        'positions count as JavaScript does; an emoji is not a word character',
+    );
+    assert.equal(retag('#Work and #work, not #workshop', 'work', 'Job'), '#Job and #Job, not #workshop');
+    assert.equal(retag('a #draft- here', 'draft', ''), 'a draft- here', 'deleting keeps the word');
+    assert.equal(cleanTag(' ##New tag! '), 'New');
+    assert.equal(cleanTag('2026'), '', 'not a tag');
+    // Suggesting tags while one is typed.
+    const { partialTag, suggestTags } = lib('tags');
+    assert.equal(partialTag('Plan #wo'), 'wo');
+    assert.equal(partialTag('#'), '', 'just typed the #');
+    assert.equal(partialTag('(#blade-in'), 'blade-in');
+    assert.equal(partialTag('Plan #work '), null, 'a space ends it');
+    assert.equal(partialTag('C#'), null, 'not where a tag can start');
+    assert.equal(partialTag('example.com/#an'), null);
+    const library = [
+        { tag: 'work', name: 'Work', notes: ['a', 'b', 'c'] },
+        { tag: 'workshop', name: 'workshop', notes: ['a'] },
+        { tag: 'homework', name: 'homework', notes: ['a', 'b'] },
+        { tag: 'gone', name: 'gone', notes: ['x'] },
+        { tag: 'wool', name: 'wool', notes: ['a', 'b', 'c', 'd'] },
+    ];
+    const live = (t) => t.notes.filter((id) => id !== 'x').length;
+    const suggested = (typed) => suggestTags(library, typed, live).map((t) => t.tag);
+    assert.deepEqual(suggested('Wor'), ['work', 'workshop', 'homework'], 'starting with it first, then containing it');
+    assert.deepEqual(
+        suggested(''),
+        ['wool', 'work', 'homework', 'workshop'],
+        'the most used, none only in deleted notes',
+    );
+    assert.deepEqual(suggested('zzz'), []);
+
+    // Renaming in a note: its title, checklist and formatted text, outside undo.
+    const tagged = openNote(index.create('text'), index);
+    tagged.initialise();
+    const listName = tagged.newList();
+    tagged.doc.doc.transact(() => {
+        tagged.setTitle('Trip #Work');
+        const para = new Y.XmlElement('paragraph');
+        const text = new Y.XmlText();
+        para.insert(0, [text]);
+        const list = new Y.XmlElement('checklist');
+        list.setAttribute('list', listName);
+        tagged.body.insert(tagged.body.length, [para, list]);
+        text.insert(0, 'Plan ');
+        text.insert(5, '#', { italic: true });
+        text.insert(6, 'work', { bold: true });
+        text.insert(10, ' and #home', { bold: null });
+    });
+    const itemId = tagged.list(listName).addItem('Pack for #work');
+    const item = () => tagged.doc.doc.getMap(listName).get(itemId);
+    const undo = new Y.UndoManager([tagged.body], { trackedOrigins: new Set([null]) });
+    assert.equal(tagged.renameTag('work', 'Job'), true);
+    const body = tagged.body.toArray()[1].toArray()[0];
+    assert.deepEqual(body.toDelta(), [
+        { insert: 'Plan ' },
+        { insert: '#', attributes: { italic: true } },
+        { insert: 'Job', attributes: { bold: true } },
+        { insert: ' and #home' },
+    ]);
+    assert.equal(get(tagged.title), 'Trip #Job');
+    assert.equal(item().get('text'), 'Pack for #Job');
+    assert.equal(undo.undoStack.length, 0, 'a rename is not an edit to undo');
+    assert.equal(tagged.renameTag('home', ''), true);
+    assert.equal(body.toString(), 'Plan <italic>#</italic><bold>Job</bold> and home');
+    assert.equal(tagged.renameTag('absent', 'x'), false, 'a note without the tag is left alone');
+    undo.destroy();
+    tagged.release();
+}
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
@@ -763,10 +853,11 @@ newer.ink('strokes:refused').erase(new Map([['anything', []]]));
 newer.ink('strokes:refused').remove(['anything']);
 newer.ink('strokes:refused').reshape(new Map([['anything', { points, width: 1 }]]));
 newer.ink('strokes:refused').setPaper('grid');
+assert.equal(newer.renameTag('anything', 'else'), false);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

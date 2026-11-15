@@ -1,6 +1,7 @@
 //! Huginn, "thought": notes, checklists, sketches.
 
 mod search;
+mod tags;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -14,11 +15,14 @@ use serde::Deserialize;
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_search.sql"),
+    include_str!("../migrations/0003_tags.sql"),
 ];
 
 fn routes(_state: SharedState) -> Router<SharedState> {
     // Notes, checklists and ink sync under /v1/sync; this is what the server adds.
-    Router::new().route("/v1/search", get(search_notes))
+    Router::new()
+        .route("/v1/search", get(search_notes))
+        .route("/v1/tags", get(list_tags))
 }
 
 /// Notes stored before search existed, or since its extraction changed, are
@@ -50,6 +54,18 @@ async fn search_notes(
             tracing::error!(?err, "searching notes");
             StatusCode::INTERNAL_SERVER_ERROR
         })
+}
+
+/// `GET /v1/tags`: the user's tags, each with the notes written with it.
+async fn list_tags(
+    User(me): User,
+    State(state): State<SharedState>,
+) -> Result<Json<Vec<tags::Tag>>, StatusCode> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    tags::list(&conn, &me.login).map(Json).map_err(|err| {
+        tracing::error!(?err, "listing tags");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
 }
 
 fn main() -> anyhow::Result<()> {
