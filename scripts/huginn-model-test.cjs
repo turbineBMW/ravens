@@ -830,6 +830,128 @@ otherDevice.destroy();
     tagged.release();
 }
 
+{
+    // Smart Folders: saved filters, worked out from the index and the tag list.
+    const { describe, holds, matches, readConditions, retagConditions } = lib('smartFolders');
+    assert.deepEqual(
+        readConditions(
+            JSON.stringify([
+                { kind: 'tag', tag: 'work' },
+                { kind: 'tag', tag: '' },
+                { kind: 'folder', folder: 'f1', within: false },
+                { kind: 'edited', days: 7.4 },
+                { kind: 'created', days: 0 },
+                { kind: 'checklist', state: 'open' },
+                { kind: 'checklist', state: 'bogus' },
+                { kind: 'pinned' },
+                { kind: 'from-the-future', x: 1 },
+                null,
+            ]),
+        ),
+        [
+            { kind: 'tag', has: true, tag: 'work' },
+            { kind: 'folder', within: false, folder: 'f1' },
+            { kind: 'edited', within: true, days: 7 },
+            { kind: 'checklist', state: 'open' },
+            { kind: 'pinned', pinned: true },
+        ],
+        "what can't be read is dropped, so a newer client's conditions never break this one",
+    );
+    assert.deepEqual(readConditions('not json'), []);
+    const DAY = 86_400_000;
+    const now = 100 * DAY;
+    const note = (id, extra = {}) => ({
+        id,
+        title: id,
+        kind: 'text',
+        created: now - 30 * DAY,
+        updated: now - 2 * DAY,
+        pinned: false,
+        deletedAt: 0,
+        deletedWith: '',
+        folder: '',
+        preview: '',
+        open: 0,
+        done: 0,
+        sketch: null,
+        ...extra,
+    });
+    const ctx = {
+        now,
+        tagNotes: new Map([['work', new Set(['a', 'b'])]]),
+        placeOf: (n) => n.folder,
+        within: (f) => (f === 'outer' ? new Set(['outer', 'inner']) : new Set()),
+    };
+    const a = note('a', { folder: 'inner', open: 2, pinned: true });
+    const b = note('b', { open: 0, done: 3, updated: now - 10 * DAY });
+    const c = note('c');
+    const check = (cond, n) => holds(cond, n, ctx);
+    assert.ok(check({ kind: 'tag', has: true, tag: 'work' }, a) && !check({ kind: 'tag', has: true, tag: 'work' }, c));
+    assert.ok(check({ kind: 'tag', has: false, tag: 'work' }, c));
+    assert.ok(check({ kind: 'folder', within: true, folder: 'outer' }, a), 'a folder includes the folders inside it');
+    assert.ok(check({ kind: 'folder', within: true, folder: '' }, b), "'' is the top level");
+    assert.ok(!check({ kind: 'folder', within: true, folder: 'gone' }, a), 'a deleted folder holds nothing');
+    assert.ok(
+        check({ kind: 'edited', within: true, days: 7 }, a) && !check({ kind: 'edited', within: true, days: 7 }, b),
+    );
+    assert.ok(check({ kind: 'created', within: false, days: 7 }, a));
+    assert.deepEqual(
+        ['open', 'done', 'none'].map((state) =>
+            [a, b, c].filter((n) => check({ kind: 'checklist', state }, n)).map((n) => n.id),
+        ),
+        [['a'], ['b'], ['c']],
+    );
+    assert.ok(check({ kind: 'pinned', pinned: true }, a) && check({ kind: 'pinned', pinned: false }, b));
+    const folder = (match, conditions) => ({ id: 's', name: 'S', match, conditions, created: 0 });
+    const both = [
+        { kind: 'tag', has: true, tag: 'work' },
+        { kind: 'checklist', state: 'open' },
+    ];
+    const ids = (f) => [a, b, c].filter((n) => matches(f, n, ctx)).map((n) => n.id);
+    assert.deepEqual(ids(folder('all', both)), ['a']);
+    assert.deepEqual(ids(folder('any', both)), ['a', 'b']);
+    assert.deepEqual(ids(folder('all', [])), [], 'no conditions, no notes');
+    assert.ok(!matches(folder('any', both), { ...a, deletedAt: 1 }, ctx), 'never a deleted note');
+    // Renaming a tag carries its conditions along; deleting it drops them.
+    const tagged = [
+        { kind: 'tag', has: false, tag: 'work' },
+        { kind: 'pinned', pinned: true },
+    ];
+    assert.deepEqual(retagConditions(tagged, 'work', 'job'), [
+        { kind: 'tag', has: false, tag: 'job' },
+        { kind: 'pinned', pinned: true },
+    ]);
+    assert.deepEqual(retagConditions(tagged, 'work', ''), [{ kind: 'pinned', pinned: true }]);
+    assert.equal(retagConditions(tagged, 'home', 'x'), null, 'nothing to change');
+    assert.equal(describe({ kind: 'edited', within: false, days: 7 }, String, String), 'Not edited in the last 7 days');
+    assert.equal(
+        describe({ kind: 'tag', has: true, tag: 'work' }, () => 'Work', String),
+        'Tagged #Work',
+    );
+
+    // In the index: made, changed, following a tag's rename, and deleted.
+    const smart = () => get(index.smartFolders);
+    const sid = index.createSmartFolder('Open work', 'all', both);
+    assert.deepEqual(
+        smart().find((f) => f.id === sid),
+        {
+            id: sid,
+            name: 'Open work',
+            match: 'all',
+            conditions: both,
+            created: smart().find((f) => f.id === sid).created,
+        },
+    );
+    index.updateSmartFolder(sid, { name: 'Busy', match: 'any' });
+    assert.equal(smart().find((f) => f.id === sid).match, 'any');
+    index.retagSmartFolders('work', 'job');
+    assert.equal(smart().find((f) => f.id === sid).conditions[0].tag, 'job', 'a renamed tag keeps its Smart Folders');
+    index.retagSmartFolders('job', '');
+    assert.deepEqual(smart().find((f) => f.id === sid).conditions, [{ kind: 'checklist', state: 'open' }]);
+    index.deleteSmartFolder(sid);
+    assert.ok(!smart().some((f) => f.id === sid));
+}
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
@@ -857,7 +979,7 @@ assert.equal(newer.renameTag('anything', 'else'), false);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

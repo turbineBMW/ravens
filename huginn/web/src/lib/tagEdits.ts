@@ -51,7 +51,8 @@ export async function renameTag(index: Index, tag: TagInfo, to: string): Promise
             note.release();
         }
     }
-    // A filter on the old tag follows it.
+    // Smart Folders and a filter on the old tag follow it.
+    index.retagSmartFolders(tag.tag, to ? tagKey(to) : '');
     const swap = (keys: string[]) =>
         [...new Set(keys.map((k) => (k === tag.tag ? (to ? tagKey(to) : '') : k)))].filter(Boolean);
     const filter = get(tagFilter);

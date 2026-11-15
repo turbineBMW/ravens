@@ -13,6 +13,9 @@
  * that folder, so restoring it brings them all back. How folders are shown
  * when changes cross (a deleted parent, a loop) is in folders.ts. Clients that
  * predate sketches or folders ignore them and show every note in one list.
+ * `smartFolders` is a Y.Map of id to Y.Map { name, match, conditions,
+ * created }, `conditions` being JSON (see smartFolders.ts); older clients
+ * ignore it.
  *
  * `note:<id>`: one document per note. `meta` holds { title }; `items` is a
  * Y.Map of item id to Y.Map { text, checked, checkedAt, pos }. Each item is
@@ -47,6 +50,7 @@ import { generateKeyBetween } from 'fractional-indexing';
 import { base } from '$app/paths';
 import { openDoc, yStore, newId, type OpenDoc } from '@ravens/ui/sync';
 import { within, type Folder } from '$lib/folders';
+import { readConditions, retagConditions, type Condition, type SmartFolder } from '$lib/smartFolders';
 import { retag, tagKey, tagMatches } from '$lib/tags';
 import { readable, type Readable } from 'svelte/store';
 
@@ -101,6 +105,17 @@ export interface Item {
 
 type YNoteMeta = Y.Map<string | number | boolean | Uint8Array>;
 type YFolder = Y.Map<string | number>;
+type YSmartFolder = Y.Map<string | number>;
+
+function readSmartFolder(id: string, m: YSmartFolder): SmartFolder {
+    return {
+        id,
+        name: String(m.get('name') ?? ''),
+        match: m.get('match') === 'any' ? 'any' : 'all',
+        conditions: readConditions(String(m.get('conditions') ?? '[]')),
+        created: Number(m.get('created') ?? 0),
+    };
+}
 type YItem = Y.Map<string | number | boolean>;
 type YStroke = Y.Map<string | number | Uint8Array>;
 
@@ -427,6 +442,13 @@ export interface Index {
     deleteFolder(id: string): void;
     /** Bring back a deleted folder with everything its deletion took. */
     restoreFolder(id: string): void;
+    smartFolders: Readable<SmartFolder[]>;
+    createSmartFolder(name: string, match: SmartFolder['match'], conditions: Condition[]): string;
+    updateSmartFolder(id: string, change: Partial<Pick<SmartFolder, 'name' | 'match' | 'conditions'>>): void;
+    /** Only the saved filter goes: its notes are where they were. */
+    deleteSmartFolder(id: string): void;
+    /** Tag `from` renamed to `to`, or deleted when `to` is empty: Smart Folders follow. */
+    retagSmartFolders(from: string, to: string): void;
     release(): void;
 }
 
@@ -483,10 +505,53 @@ export function openIndex(): Index {
         folderMap.forEach((m, id) => all.push(readFolder(id, m)));
         return all;
     };
+    const smartMap = doc.doc.getMap<YSmartFolder>('smartFolders');
+    const readSmart = () => {
+        const all: SmartFolder[] = [];
+        smartMap.forEach((m, id) => all.push(readSmartFolder(id, m)));
+        return all.sort(
+            (a, b) =>
+                a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }) ||
+                a.id.localeCompare(b.id),
+        );
+    };
     return {
         doc,
         notes,
         folders: yStore(folderMap, readFolders),
+        smartFolders: yStore(smartMap, readSmart),
+        createSmartFolder(name, match, conditions) {
+            const id = newId();
+            doc.doc.transact(() => {
+                const m: YSmartFolder = new Y.Map();
+                m.set('name', name);
+                m.set('match', match);
+                m.set('conditions', JSON.stringify(conditions));
+                m.set('created', Date.now());
+                smartMap.set(id, m);
+            });
+            return id;
+        },
+        updateSmartFolder(id, change) {
+            const m = smartMap.get(id);
+            if (!m) return;
+            doc.doc.transact(() => {
+                if (change.name !== undefined) m.set('name', change.name);
+                if (change.match !== undefined) m.set('match', change.match);
+                if (change.conditions !== undefined) m.set('conditions', JSON.stringify(change.conditions));
+            });
+        },
+        deleteSmartFolder(id) {
+            smartMap.delete(id);
+        },
+        retagSmartFolders(from, to) {
+            doc.doc.transact(() => {
+                smartMap.forEach((m) => {
+                    const next = retagConditions(readConditions(String(m.get('conditions') ?? '[]')), from, to);
+                    if (next) m.set('conditions', JSON.stringify(next));
+                });
+            });
+        },
         create(kind, folder = '') {
             const id = newId();
             const now = Date.now();
