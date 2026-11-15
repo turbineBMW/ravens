@@ -4,7 +4,7 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 15, 2026, at `47041a8`:
+As of November 15, 2026, at `2bc86d2`:
 
 | Phase | State |
 | --- | --- |
@@ -12,8 +12,9 @@ As of November 15, 2026, at `47041a8`:
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
 | P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. Find in note (PR #20) passed on the Surface. Links between notes, with backlinks (PR #21, format 5), passed on the Surface. Detected addresses and phone numbers (PR #22), the last required item, deployed to the mini with links checked. See [Phase 3](#phase-3--organization-and-finding-things). |
-| P4, P6–P9 | Not started. |
+| P3 Organization | **Done.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. Find in note (PR #20) passed on the Surface. Links between notes, with backlinks (PR #21, format 5), passed on the Surface. Detected addresses and phone numbers (PR #22), the last required item, passed on the mini with links checked. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P4 Attachments | **Planned**, not started: decisions and seven increments in [Phase 4](#phase-4--attachments-capture-and-portability). |
+| P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
 
@@ -306,6 +307,32 @@ Still to do in this phase: nothing required. Replace, as Apple Notes has with fi
 - Quick capture route/inbox and share-target support where the browser permits it, with paste/file-picker fallback. Capture source URLs along with content.
 
 **Exit:** paste an image offline, restart, reconnect, and open it on the other device. Cancel/retry a large upload without creating duplicate attachments. Export a representative library and reimport into a fresh profile with assets accounted for. Verify print output with long notes and page breaks.
+
+**Plan, November 15, 2026.** Decisions first, as decisions 5 and 7 above ask, then the increments, each a PR checked on the Surface as in Phase 3.
+
+Decisions:
+
+- **Files on disk, records in SQLite.** Each attachment's bytes are a file in the data volume (`/data/blobs/<owner>/<id>`), written to a temporary file and renamed once its size and SHA-256 match what the client said, so a file is either complete or absent. Its record (`blobs`: owner, id, size, hash, media type, created, last referenced) is in the app's database. Keeping bytes out of SQLite keeps the database small enough to back up and search quickly, and lets the server answer range requests (video seeking, PDF pages) with tower-http's file serving, which it already has.
+- **One ID per attachment, chosen by the client.** `PUT /v1/blobs/<id>` with the hash and size is idempotent: sending it again, after a dropped connection or from a second try, stores nothing new, and a different body under the same ID is refused. That is what keeps a retried upload from making a duplicate. IDs are random rather than content hashes, so equal files in two notes don't reveal that they're equal, which matters once notes can be encrypted.
+- **The server never needs to read an attachment.** Thumbnails, image sizes, video posters and PDF page counts are made on the device that adds the file and uploaded beside it as a second blob. The server stores, checks and serves bytes. A private note (Phase 8A) can then encrypt the file and its thumbnail on the device with a key kept in the encrypted note, and nothing on the server changes. This answers decision 7: attachment keys will live in the note, and plaintext previews never reach the server for a private note.
+- **In the note, an `attachment` block** with the blob's ID and what's needed to show it before it arrives: kind, name, media type, size, width and height, thumbnail ID, alt text. That's note format 6 (`NOTE_FORMAT`, `CLIENT_VERSION` and `min_client` 6), since a format 5 client would drop a block it can't read. Copying a block copies the reference, and both copies show the same file. Upload progress isn't synced: each device knows what it has still to send, and another device shows *Not uploaded yet* until the bytes are there.
+- **Offline.** Files added offline wait in IndexedDB, are shown from there at once, and upload in order when connected, across restarts. Thumbnails are kept on every device that has the note; full files are downloaded when opened and kept until the browser needs the space. Huginn asks for persistent storage (`navigator.storage.persist()`) when the first attachment is added, and a full device says so, keeping the file in the note rather than losing it.
+- **Originals are kept.** A photo is stored as taken; the note shows its thumbnail, or a screen-sized copy for large images, made on the device.
+- **Limits.** A file size limit (`RAVEN_BLOB_MAX_BYTES`, default 200 MB) and a per-person quota (`RAVEN_BLOB_QUOTA_BYTES`, default 20 GB), refused before any bytes are stored; Settings shows what's used.
+- **Garbage collection follows the notes.** The server mirrors each note's attachment references into `note_attachments` with its search lines, as it does tags and links. A file no note refers to, Recently Deleted included, is removed 30 days after it was last referred to, which covers undo, other devices still offline and restoring a deleted note. Until Phase 0's purge lands, nothing in Recently Deleted expires, so neither do its files.
+- **Backups include attachments** once real data arrives: the database backup, then the blob folder, which only ever gains new files under new names, so copying it after the database is consistent.
+
+Increments:
+
+1. **Images**, the foundation for everything after it. The blob store and its API, the upload queue and local cache, the `attachment` block and format 6. Adding an image from the toolbar, a file picker, the camera (`capture` on phones), paste or drag and drop; the thumbnail in the note, full size on a tap, alt text, *Download*, *Delete*. Status in the block: waiting, uploading, not uploaded yet from another device, failed with *Retry*. Browser tests for the offline exit above: paste offline, reload, reconnect, open on a second device; and a retried upload making one file.
+2. **Files and video.** Any file as a block with its icon, name and size, opening or downloading; video with a poster frame and playback that seeks. Uploads over 8 MB go in chunks that resume where they stopped (`PATCH` with an offset), with *Cancel*. Quota and usage in Settings.
+3. **PDFs.** A PDF block shows its first page; opening it shows its pages with zoom, page by page, using pdf.js loaded only when a PDF is opened. *Open* and *Download* as for any file. Markup waits for Phase 6.
+4. **Attachments browser and search.** A view of every attachment, filtered by kind (images, videos, PDFs, other files), each opening its note at the block. Search finds attachments by name and alt text. A Smart Folder condition, *has attachments*, as Phase 3 planned.
+5. **Garbage collection and backups.** Removing files no note refers to, as above, a backup script that includes the blob folder, and a restore into a fresh instance in the browser test.
+6. **Export, print and import.** Print and *Save as PDF* through a print stylesheet that breaks pages sensibly; a note as Markdown or HTML, with its attachments beside it; Markdown and text import. A Huginn archive (a zip of every note, folder, tag and attachment, with their metadata) and importing it into an empty library, with a report of anything that couldn't come across. Markdown can't hold drawings or checklists' state exactly; the report says so.
+7. **Capture.** A quick capture page (`/huginn/capture`) adding to an Inbox folder; Huginn as a share target when installed, so text, links and files can be shared into a new note; the source URL kept with what's captured. Link previews (title, description, image) fetched by the server with strict limits: public addresses only, never the tailnet or the local network, a short timeout and a size cap.
+
+Order: 1 first, since everything depends on it, then 2 and 3, then 4, 5 and 6, which are independent of one another, then 7. Link previews are the riskiest piece on the server and can be dropped or moved without affecting the rest.
 
 ### Phase 5 — Editable ink for Surface and Fold
 
