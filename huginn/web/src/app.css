@@ -713,6 +713,89 @@
 .note-row .picture {
     object-fit: cover;
 }
+/* Every attachment in the library. */
+.attachments-browser {
+    width: min(900px, 100vw - 16px);
+    max-width: none;
+    height: min(800px, 100dvh - 16px);
+    max-height: none;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg);
+    color: var(--text);
+}
+.attachments-browser[open] {
+    display: grid;
+    grid-template-rows: auto auto 1fr;
+}
+.attachments-browser::backdrop {
+    background: rgb(0 0 0 / 0.5);
+}
+.browser-tools {
+    display: grid;
+    gap: 8px;
+    padding: 8px 12px;
+}
+.browser-kinds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.browser-kinds .chip {
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+.browser-kinds .chip[aria-checked='true'] {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border-color: var(--accent);
+}
+.browser-body {
+    min-height: 0;
+    overflow: auto;
+    padding: 0 12px 12px;
+}
+.browser-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.browser-item {
+    display: grid;
+    gap: 4px;
+    width: 100%;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.browser-picture {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border-radius: 4px;
+    background: var(--bg);
+}
+.browser-picture .picture {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
 /* An attachment shown whole. */
 .attachment-viewer {
     width: min(1100px, 100vw - 16px);

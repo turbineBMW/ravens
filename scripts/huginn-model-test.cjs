@@ -928,6 +928,10 @@ otherDevice.destroy();
         tagNotes: new Map([['work', new Set(['a', 'b'])]]),
         placeOf: (n) => n.folder,
         within: (f) => (f === 'outer' ? new Set(['outer', 'inner']) : new Set()),
+        attachmentKinds: new Map([
+            ['a', new Set(['image', 'pdf'])],
+            ['b', new Set(['link'])],
+        ]),
     };
     const a = note('a', { folder: 'inner', open: 2, pinned: true });
     const b = note('b', { open: 0, done: 3, updated: now - 10 * DAY });
@@ -949,6 +953,16 @@ otherDevice.destroy();
         [['a'], ['b'], ['c']],
     );
     assert.ok(check({ kind: 'pinned', pinned: true }, a) && check({ kind: 'pinned', pinned: false }, b));
+    const withAttachments = (has, of) =>
+        [a, b, c].filter((n) => check({ kind: 'attachments', has, of }, n)).map((n) => n.id);
+    assert.deepEqual(withAttachments(true, 'any'), ['a', 'b']);
+    assert.deepEqual(withAttachments(true, 'pdf'), ['a']);
+    assert.deepEqual(withAttachments(false, 'image'), ['b', 'c']);
+    assert.deepEqual(withAttachments(false, 'any'), ['c']);
+    assert.deepEqual(readConditions(JSON.stringify([{ kind: 'attachments', of: 'sculpture' }])), [
+        { kind: 'attachments', has: true, of: 'any' },
+    ]);
+    assert.equal(describe({ kind: 'attachments', has: false, of: 'pdf' }, String, String), 'Has no PDFs');
     const folder = (match, conditions) => ({ id: 's', name: 'S', match, conditions, created: 0 });
     const both = [
         { kind: 'tag', has: true, tag: 'work' },

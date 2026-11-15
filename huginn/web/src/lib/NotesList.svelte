@@ -11,6 +11,8 @@
     import SmartFolderActions from '$lib/SmartFolderActions.svelte';
     import SmartFolderEditor from '$lib/SmartFolderEditor.svelte';
     import PictureThumb from '$lib/PictureThumb.svelte';
+    import { kindsByNote, libraryAttachments, refreshAttachments } from '$lib/attachments';
+    import AttachmentsBrowser from '$lib/AttachmentsBrowser.svelte';
     import { describe, matches, type Condition, type SmartFolder } from '$lib/smartFolders';
     import TagChip from '$lib/TagChip.svelte';
     import { filterByTag, refreshTags, tagFilter, tags, tagsFresh } from '$lib/tags';
@@ -125,6 +127,7 @@
         const timer = setTimeout(() => {
             void refreshTags();
             void refreshLinks();
+            void refreshAttachments();
         }, 1500);
         return () => clearTimeout(timer);
     });
@@ -198,6 +201,7 @@
             tagNotes,
             placeOf,
             within: (id: string) => within(folders, id),
+            attachmentKinds: kindsByNote($libraryAttachments),
         };
         return new Map(smart.map((f) => [f.id, active.filter((n) => matches(f, n, ctx))]));
     });
@@ -207,6 +211,7 @@
         f.conditions.map((c) => describe(c, tagName, folderName)).join(f.match === 'all' ? ' and ' : ' or ') ||
         'No conditions';
     /** The Smart Folder being made or changed. */
+    let browsing = $state(false);
     let editingSmart = $state<{ folder: SmartFolder | null; draft?: Condition[] } | null>(null);
     function saveFilter() {
         editingSmart = {
@@ -425,6 +430,14 @@
                         if (trash) choose({ kind: 'all' });
                         editingSmart = { folder: null };
                     }}>New Smart Folder…</button
+                >
+                <button
+                    class="btn"
+                    type="button"
+                    onclick={() => {
+                        menu.open = false;
+                        browsing = true;
+                    }}>Attachments…</button
                 >
                 <button class="btn" type="button" aria-current={trash} onclick={() => choose({ kind: 'trash' })}>
                     Recently Deleted <span class="muted">{deleted.length + deletedFolders.length}</span>
@@ -659,6 +672,9 @@
             <button class="btn danger" type="button" disabled={!chosen.length} onclick={deleteChosen}>Delete</button>
         {/if}
     </div>
+{/if}
+{#if browsing}
+    <AttachmentsBrowser {index} onclose={() => (browsing = false)} />
 {/if}
 {#if editingSmart}
     <SmartFolderEditor

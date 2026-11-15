@@ -5,13 +5,19 @@
  * list already know, so they show offline and never open a note.
  */
 import type { NoteMeta } from '$lib/notes';
+import type { AttachmentKind } from '$lib/thumbs';
+
+/** Any attachment, or one kind of them. */
+export type AttachmentFilter = 'any' | AttachmentKind;
+const ATTACHMENT_FILTERS: AttachmentFilter[] = ['any', 'image', 'video', 'pdf', 'file', 'link'];
 
 export type Condition =
     | { kind: 'tag'; has: boolean; tag: string }
     | { kind: 'folder'; within: boolean; folder: string }
     | { kind: 'edited' | 'created'; within: boolean; days: number }
     | { kind: 'checklist'; state: 'open' | 'done' | 'none' }
-    | { kind: 'pinned'; pinned: boolean };
+    | { kind: 'pinned'; pinned: boolean }
+    | { kind: 'attachments'; has: boolean; of: AttachmentFilter };
 
 export interface SmartFolder {
     id: string;
@@ -54,6 +60,14 @@ export function readConditions(json: string): Condition[] {
                     : [];
             case 'pinned':
                 return [{ kind: 'pinned', pinned: o.pinned !== false }];
+            case 'attachments':
+                return [
+                    {
+                        kind: 'attachments',
+                        has: o.has !== false,
+                        of: ATTACHMENT_FILTERS.includes(o.of as AttachmentFilter) ? (o.of as AttachmentFilter) : 'any',
+                    },
+                ];
             default:
                 return [];
         }
@@ -69,6 +83,8 @@ export interface Context {
     placeOf: (note: NoteMeta) => string;
     /** A live folder and the folders inside it; empty for one that's gone. */
     within: (folder: string) => Set<string>;
+    /** Each note's kinds of attachment (attachments.ts); a note with none isn't in it. */
+    attachmentKinds: Map<string, Set<AttachmentKind>>;
 }
 
 export function holds(c: Condition, note: NoteMeta, ctx: Context): boolean {
@@ -89,6 +105,11 @@ export function holds(c: Condition, note: NoteMeta, ctx: Context): boolean {
                   : note.open + note.done === 0;
         case 'pinned':
             return note.pinned === c.pinned;
+        case 'attachments': {
+            const kinds = ctx.attachmentKinds.get(note.id);
+            const has = c.of === 'any' ? !!kinds?.size : (kinds?.has(c.of) ?? false);
+            return has === c.has;
+        }
     }
 }
 
@@ -127,5 +148,16 @@ export function describe(c: Condition, tagName: (key: string) => string, folderN
                   : 'No checklist items';
         case 'pinned':
             return c.pinned ? 'Pinned' : 'Not pinned';
+        case 'attachments': {
+            const what = {
+                any: 'attachments',
+                image: 'images',
+                video: 'videos',
+                pdf: 'PDFs',
+                file: 'other files',
+                link: 'links',
+            }[c.of];
+            return `${c.has ? 'Has' : 'Has no'} ${what}`;
+        }
     }
 }

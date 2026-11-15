@@ -470,6 +470,35 @@ async function main() {
     );
     assert.equal(await other.js(`document.querySelector('.note-attachment img').alt`), 'Blade root, teal');
 
+    // ---------- the attachments browser ----------
+    const pdfBlob = JSON.parse(await page.js(attachments)).find((x) => x.kind === 'pdf').blob;
+    await page.go(BASE); // Away from the note, to come back to it from the browser.
+    await until(page.js, `!!document.querySelector('[aria-label="Main menu"]')`);
+    await page.js(`document.querySelector('[aria-label="Main menu"]').click()`);
+    await page.js(
+        `[...document.querySelectorAll('.primary-menu .btn')].find((b) => b.textContent.startsWith('Attachments')).click()`,
+    );
+    const chips = `[...document.querySelectorAll('.attachments-browser .chip')].map((c) => c.textContent.replace(/\\s+/g, ' ').trim()).join()`;
+    await until(page.js, `${chips} === 'All 4,Images 3,PDFs 1'`, 20_000);
+    await page.js(
+        `[...document.querySelectorAll('.attachments-browser .chip')].find((c) => c.textContent.startsWith('PDFs')).click()`,
+    );
+    await until(page.js, `document.querySelectorAll('.browser-item').length === 1`);
+    assert.match(
+        await page.js(`document.querySelector('.browser-item').textContent`),
+        /manual\.pdf.*Inspection photos/s,
+    );
+    await page.js(`document.querySelector('.browser-item').click()`);
+    await until(
+        page.js,
+        `location.hash === '#attachment-${pdfBlob}' && !document.querySelector('.attachments-browser')`,
+    );
+    await until(
+        page.js,
+        `document.querySelector('.note-attachment.ProseMirror-selectednode')?.dataset.blob === '${pdfBlob}'`,
+        20_000,
+    );
+
     // ---------- deleting one ----------
     await page.js(`document.querySelectorAll('.note-attachment summary')[1].click()`);
     await page.js(
@@ -484,7 +513,7 @@ async function main() {
 
     for (const [sessionId, errors] of pageErrors) assert.deepEqual(errors, [], `page errors in ${sessionId}`);
     console.log(
-        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, deleting)',
+        'PASS: attachments (upload protocol, pasting images, thumbnails, server listing, notes list picture, viewer, alt text and search, PDF, offline and reconnecting, second device, the attachments browser, deleting)',
     );
 }
 
