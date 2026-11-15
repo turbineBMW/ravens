@@ -311,18 +311,60 @@
 }
 
 /* ---- the rich editor ---- */
-.editor-toolbar {
+/* The toolbar, and find in note under it while it's open, stay in view. */
+.editor-top {
     position: sticky;
     top: calc(48px + env(safe-area-inset-top));
     z-index: 4;
+    margin: 0 -8px 8px;
+    background: var(--bg);
+}
+.editor-toolbar {
     display: flex;
     gap: 2px;
     align-items: center;
-    margin: 0 -8px 8px;
     padding: 2px 8px;
     overflow-x: auto;
-    background: var(--bg);
     scrollbar-width: none;
+}
+.find-bar {
+    display: flex;
+    gap: 2px;
+    align-items: center;
+    padding: 0 8px 6px;
+}
+.find-bar input {
+    flex: 1;
+    min-width: 0;
+    min-height: var(--tap);
+    margin-right: 4px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+}
+.find-count {
+    flex: 0 0 auto;
+    padding: 0 4px;
+    white-space: nowrap;
+}
+/* Matches: every one marked, the current one stronger. */
+.tiptap .find-match {
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.tiptap .find-current {
+    background: color-mix(in srgb, var(--warn) 60%, transparent);
+    outline: 1px solid var(--warn);
+}
+.checklist li.found {
+    background: color-mix(in srgb, var(--warn) 14%, var(--panel));
+}
+.checklist li.found-current {
+    background: color-mix(in srgb, var(--warn) 30%, var(--panel));
+    box-shadow: inset 3px 0 0 var(--warn);
 }
 .editor-toolbar select,
 .editor-toolbar button {

@@ -14,12 +14,16 @@
     import { NodeSelection, TextSelection } from '@tiptap/pm/state';
     import StarterKit from '@tiptap/starter-kit';
     import { ySyncPluginKey } from '@tiptap/y-tiptap';
-    import { getContext, mount, onMount, unmount } from 'svelte';
+    import { getContext, mount, onMount, tick, unmount } from 'svelte';
+    import { get, writable } from 'svelte/store';
     import * as Y from 'yjs';
     import ChecklistBlock from '$lib/ChecklistBlock.svelte';
     import InkBlock from '$lib/InkBlock.svelte';
     import { remindMeHref } from '$lib/links';
-    import { Sections, revealSection, sectionAt } from '$lib/sections';
+    import { matchCount, type Found } from '$lib/find';
+    import { FindInNote, findKey, findState, type FindAction } from '$lib/findInNote';
+    import Icon from '$lib/Icon.svelte';
+    import { Sections, revealPosition, revealSection, sectionAt } from '$lib/sections';
     import { Hashtags, type TypedTag } from '$lib/hashtags';
     import TagSuggest from '$lib/TagSuggest.svelte';
     import { filterByTag, suggestTags, tags, type TagInfo } from '$lib/tags';
@@ -86,6 +90,110 @@
         const { left, top, bottom } = editor.view.coordsAtPos(typing.from);
         typing = { ...typing, left, top, bottom };
     }
+    // Find in note: a field under the toolbar, Ctrl+F or the note menu to open it.
+    let finding = $state(false);
+    let query = $state('');
+    let findInput = $state<HTMLInputElement>();
+    /** Told to the checklist blocks, which highlight their own items. */
+    const found = writable<Found>({ query: '', list: null, item: null, shown: 0 });
+    const find = $derived.by(() => {
+        void revision;
+        return editor ? findState(editor.state) : undefined;
+    });
+    const countText = $derived(find?.query ? matchCount(find.current, find.matches.length) : '');
+
+    function tellBlocks(ed: Editor, show = false) {
+        const state = findState(ed.state);
+        const match = state?.matches[state.current];
+        const was = get(found);
+        const next: Found = {
+            query: state?.query ?? '',
+            list: match?.kind === 'item' ? match.list : null,
+            item: match?.kind === 'item' ? match.item : null,
+            shown: was.shown + (show ? 1 : 0),
+        };
+        if (next.query !== was.query || next.list !== was.list || next.item !== was.item || show) found.set(next);
+    }
+    function findAction(action: FindAction) {
+        editor?.view.dispatch(editor.state.tr.setMeta(findKey, action));
+    }
+    /** Bring the current match into view, opening any collapsed section it's in. */
+    function showMatch() {
+        if (!editor) return;
+        const state = findState(editor.state);
+        const match = state?.matches[state.current];
+        if (match) revealPosition(editor.view, match.from);
+        tellBlocks(editor, !!match);
+        // A checklist brings its own item into view.
+        if (match?.kind === 'text') editor.view.dom.querySelector('.find-current')?.scrollIntoView({ block: 'center' });
+    }
+    function lookFor(text: string) {
+        query = text;
+        findAction({ query: text });
+        showMatch();
+    }
+    function step(by: 1 | -1) {
+        findAction({ step: by });
+        showMatch();
+    }
+    function openFind() {
+        if (!editor) return;
+        // Text selected on one line is what's looked for.
+        const { from, to, empty } = editor.state.selection;
+        const selected = empty ? '' : editor.state.doc.textBetween(from, to, '\n', ' ');
+        if (selected.trim() && !selected.includes('\n') && selected.length <= 100) query = selected;
+        finding = true;
+        lookFor(query);
+        void tick().then(() => {
+            findInput?.focus();
+            findInput?.select();
+        });
+    }
+    /** `focus`: put the caret on the current match, selecting it, as Escape does. */
+    function closeFind(focus: boolean) {
+        if (!editor) return;
+        const state = findState(editor.state);
+        const match = state?.matches[state.current];
+        finding = false;
+        findAction({ query: '' });
+        tellBlocks(editor);
+        if (!focus || !match) return;
+        if (match.kind === 'text') {
+            editor.chain().focus().setTextSelection({ from: match.from, to: match.to }).scrollIntoView().run();
+        } else {
+            const input = host.querySelector<HTMLInputElement>(
+                `.note-checklist [data-item="${CSS.escape(match.item)}"] input.text`,
+            );
+            input?.focus();
+            input?.setSelectionRange(match.at, match.end);
+        }
+    }
+    function onFindKey(event: KeyboardEvent) {
+        if (event.isComposing) return;
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            step(event.shiftKey ? -1 : 1);
+        } else if (event.key === 'Escape') {
+            event.preventDefault();
+            closeFind(true);
+        }
+    }
+    /** Ctrl+F (⌘F) from anywhere in the note; F3 or Ctrl+G for the next match, with Shift the previous. */
+    function onWindowKey(event: KeyboardEvent) {
+        const mod = event.ctrlKey || event.metaKey;
+        const key = event.key.toLowerCase();
+        if (mod && !event.altKey && !event.shiftKey && key === 'f') {
+            const target = event.target as Element | null;
+            // The notes list keeps the browser's own find.
+            if (target && target !== document.body && !target.closest('.editor-pane')) return;
+            event.preventDefault();
+            openFind();
+        } else if (finding && !event.altKey && (key === 'f3' || (mod && key === 'g'))) {
+            event.preventDefault();
+            step(event.shiftKey ? -1 : 1);
+        }
+    }
+
     // Toolbar state is read from the editor, so redraw it on every change.
     let revision = $state(0);
     let linkOpen = $state(false);
@@ -188,7 +296,11 @@
                     const dom = document.createElement('div');
                     dom.className = 'note-checklist';
                     dom.contentEditable = 'false';
-                    const block = mount(ChecklistBlock, { target: dom, props: { note, id, list } });
+                    const block = mount(ChecklistBlock, {
+                        target: dom,
+                        props: { note, id, list },
+                        context: new Map([['find', found]]),
+                    });
                     return {
                         dom,
                         // The rows handle their own typing, clicks and drags.
@@ -244,9 +356,13 @@
                     onTyping,
                     onKey,
                 }),
+                FindInNote.configure({ itemsOf: (list) => get(note.list(list).items) }),
                 Collaboration.configure({ fragment: note.body, yUndoOptions: { undoManager: undo } }),
             ],
-            onTransaction: () => revision++,
+            onTransaction: ({ editor: ed }) => {
+                revision++;
+                tellBlocks(ed);
+            },
         });
         editor = created;
         revealLinkedSection();
@@ -254,6 +370,19 @@
         addEventListener('hashchange', revealLinkedSection);
         addEventListener('scroll', follow, true);
         addEventListener('resize', follow);
+        addEventListener('keydown', onWindowKey);
+        addEventListener('huginn:find', openFind);
+        // Checklist items aren't in the body, so a change to one is looked through again.
+        let rereading = false;
+        const reread = () => {
+            if (!finding || rereading) return;
+            rereading = true;
+            queueMicrotask(() => {
+                rereading = false;
+                if (editor === created && finding) findAction({ refresh: true });
+            });
+        };
+        note.doc.doc.on('update', reread);
         // Only a blank note takes focus: opening an existing one must not raise a phone's keyboard.
         if (created.isEmpty && !created.state.doc.firstChild?.type.name.startsWith('checklist')) {
             created.commands.focus('start');
@@ -262,6 +391,9 @@
             removeEventListener('hashchange', revealLinkedSection);
             removeEventListener('scroll', follow, true);
             removeEventListener('resize', follow);
+            removeEventListener('keydown', onWindowKey);
+            removeEventListener('huginn:find', openFind);
+            note.doc.doc.off('update', reread);
             created.destroy();
             undo.destroy();
             editor = null;
@@ -269,90 +401,133 @@
     });
 </script>
 
-<div class="editor-toolbar" role="toolbar" aria-label="Formatting">
-    <select
-        aria-label="Text style"
-        value={blockStyle}
-        disabled={!editor}
-        onchange={(e) => setBlockStyle(e.currentTarget.value)}
-    >
-        <option value="body">Body</option>
-        <option value="title">Title</option>
-        <option value="heading">Heading</option>
-        <option value="subheading">Subheading</option>
-        <option value="mono">Monospaced</option>
-    </select>
-    {#snippet tool(label: string, text: string, run: () => void, pressed?: boolean, disabled?: boolean)}
-        <button
-            type="button"
-            aria-label={label}
-            title={label}
-            aria-pressed={pressed}
-            disabled={!editor || disabled}
-            onmousedown={(e) => e.preventDefault()}
-            onclick={run}>{text}</button
+<div class="editor-top">
+    <div class="editor-toolbar" role="toolbar" aria-label="Formatting">
+        <select
+            aria-label="Text style"
+            value={blockStyle}
+            disabled={!editor}
+            onchange={(e) => setBlockStyle(e.currentTarget.value)}
         >
-    {/snippet}
-    <span class="sep"></span>
-    {@render tool('Bold', 'B', () => chain().toggleBold().run(), active('bold'))}
-    {@render tool('Italic', 'I', () => chain().toggleItalic().run(), active('italic'))}
-    {@render tool('Underline', 'U', () => chain().toggleUnderline().run(), active('underline'))}
-    {@render tool('Strikethrough', 'S', () => chain().toggleStrike().run(), active('strike'))}
-    {@render tool('Highlight', 'Mark', () => chain().toggleHighlight().run(), active('highlight'))}
-    {@render tool('Link', 'Link', toggleLinkField, active('link'))}
-    {#if reminderHref}
-        <a class="tool-link" href={reminderHref} title="Remind me about the selected text">Remind me</a>
-    {:else}
-        <span class="tool-link" aria-disabled="true" title="Select text to make a reminder">Remind me</span>
-    {/if}
-    {@render tool('Paste as plain text', 'Paste text', () => void pastePlain())}
-    <span class="sep"></span>
-    {@render tool('Bulleted list', '• List', () => chain().toggleBulletList().run(), active('bulletList'))}
-    {@render tool('Numbered list', '1. List', () => chain().toggleOrderedList().run(), active('orderedList'))}
-    {@render tool(
-        'Indent',
-        'Indent',
-        () => chain().sinkListItem('listItem').run(),
-        undefined,
-        !can((e) => e.can().sinkListItem('listItem')),
-    )}
-    {@render tool(
-        'Outdent',
-        'Outdent',
-        () => chain().liftListItem('listItem').run(),
-        undefined,
-        !can((e) => e.can().liftListItem('listItem')),
-    )}
-    <span class="sep"></span>
-    {@render tool('Add checklist', 'Checklist', () =>
-        chain()
-            .command(pastBlock)
-            .insertContent({ type: 'checklist', attrs: { list: note.newList() } })
-            .command(pastBlock)
-            .run(),
-    )}
-    {@render tool('Add drawing', 'Drawing', () =>
-        chain()
-            .command(pastBlock)
-            .insertContent({ type: 'ink', attrs: { strokes: note.newInk() } })
-            .command(pastBlock)
-            .run(),
-    )}
-    {@render tool('Add table', 'Table', () =>
-        chain().command(pastBlock).insertTable({ rows: 2, cols: 2, withHeaderRow: false }).run(),
-    )}
-    {@render tool('Add divider', 'Divider', () => chain().command(pastBlock).setHorizontalRule().run())}
-    {#if inTable}
+            <option value="body">Body</option>
+            <option value="title">Title</option>
+            <option value="heading">Heading</option>
+            <option value="subheading">Subheading</option>
+            <option value="mono">Monospaced</option>
+        </select>
+        {#snippet tool(label: string, text: string, run: () => void, pressed?: boolean, disabled?: boolean)}
+            <button
+                type="button"
+                aria-label={label}
+                title={label}
+                aria-pressed={pressed}
+                disabled={!editor || disabled}
+                onmousedown={(e) => e.preventDefault()}
+                onclick={run}>{text}</button
+            >
+        {/snippet}
         <span class="sep"></span>
-        {@render tool('Add row', '+ Row', () => chain().addRowAfter().run())}
-        {@render tool('Delete row', '− Row', () => chain().deleteRow().run())}
-        {@render tool('Add column', '+ Column', () => chain().addColumnAfter().run())}
-        {@render tool('Delete column', '− Column', () => chain().deleteColumn().run())}
-        {@render tool('Delete table', 'Delete table', () => chain().deleteTable().run())}
+        {@render tool('Bold', 'B', () => chain().toggleBold().run(), active('bold'))}
+        {@render tool('Italic', 'I', () => chain().toggleItalic().run(), active('italic'))}
+        {@render tool('Underline', 'U', () => chain().toggleUnderline().run(), active('underline'))}
+        {@render tool('Strikethrough', 'S', () => chain().toggleStrike().run(), active('strike'))}
+        {@render tool('Highlight', 'Mark', () => chain().toggleHighlight().run(), active('highlight'))}
+        {@render tool('Link', 'Link', toggleLinkField, active('link'))}
+        {#if reminderHref}
+            <a class="tool-link" href={reminderHref} title="Remind me about the selected text">Remind me</a>
+        {:else}
+            <span class="tool-link" aria-disabled="true" title="Select text to make a reminder">Remind me</span>
+        {/if}
+        {@render tool('Paste as plain text', 'Paste text', () => void pastePlain())}
+        <span class="sep"></span>
+        {@render tool('Bulleted list', '• List', () => chain().toggleBulletList().run(), active('bulletList'))}
+        {@render tool('Numbered list', '1. List', () => chain().toggleOrderedList().run(), active('orderedList'))}
+        {@render tool(
+            'Indent',
+            'Indent',
+            () => chain().sinkListItem('listItem').run(),
+            undefined,
+            !can((e) => e.can().sinkListItem('listItem')),
+        )}
+        {@render tool(
+            'Outdent',
+            'Outdent',
+            () => chain().liftListItem('listItem').run(),
+            undefined,
+            !can((e) => e.can().liftListItem('listItem')),
+        )}
+        <span class="sep"></span>
+        {@render tool('Add checklist', 'Checklist', () =>
+            chain()
+                .command(pastBlock)
+                .insertContent({ type: 'checklist', attrs: { list: note.newList() } })
+                .command(pastBlock)
+                .run(),
+        )}
+        {@render tool('Add drawing', 'Drawing', () =>
+            chain()
+                .command(pastBlock)
+                .insertContent({ type: 'ink', attrs: { strokes: note.newInk() } })
+                .command(pastBlock)
+                .run(),
+        )}
+        {@render tool('Add table', 'Table', () =>
+            chain().command(pastBlock).insertTable({ rows: 2, cols: 2, withHeaderRow: false }).run(),
+        )}
+        {@render tool('Add divider', 'Divider', () => chain().command(pastBlock).setHorizontalRule().run())}
+        {#if inTable}
+            <span class="sep"></span>
+            {@render tool('Add row', '+ Row', () => chain().addRowAfter().run())}
+            {@render tool('Delete row', '− Row', () => chain().deleteRow().run())}
+            {@render tool('Add column', '+ Column', () => chain().addColumnAfter().run())}
+            {@render tool('Delete column', '− Column', () => chain().deleteColumn().run())}
+            {@render tool('Delete table', 'Delete table', () => chain().deleteTable().run())}
+        {/if}
+        <span class="sep"></span>
+        {@render tool('Undo', 'Undo', () => chain().undo().run(), undefined, !can((e) => e.can().undo()))}
+        {@render tool('Redo', 'Redo', () => chain().redo().run(), undefined, !can((e) => e.can().redo()))}
+    </div>
+    {#if finding}
+        <div class="find-bar" role="search">
+            <input
+                bind:this={findInput}
+                type="search"
+                value={query}
+                placeholder="Find in note"
+                aria-label="Find in note"
+                autocomplete="off"
+                autocapitalize="off"
+                spellcheck="false"
+                enterkeyhint="search"
+                oninput={(e) => lookFor(e.currentTarget.value)}
+                onkeydown={onFindKey}
+            />
+            <span class="find-count small muted" role="status">{countText}</span>
+            <button
+                class="icon-btn"
+                type="button"
+                aria-label="Previous match"
+                title="Previous match (Shift+Enter)"
+                disabled={!find?.matches.length}
+                onclick={() => step(-1)}><Icon name="up" /></button
+            >
+            <button
+                class="icon-btn"
+                type="button"
+                aria-label="Next match"
+                title="Next match (Enter)"
+                disabled={!find?.matches.length}
+                onclick={() => step(1)}><Icon name="down" /></button
+            >
+            <button
+                class="icon-btn"
+                type="button"
+                aria-label="Close find"
+                title="Close (Escape)"
+                onclick={() => closeFind(false)}><Icon name="close" /></button
+            >
+        </div>
     {/if}
-    <span class="sep"></span>
-    {@render tool('Undo', 'Undo', () => chain().undo().run(), undefined, !can((e) => e.can().undo()))}
-    {@render tool('Redo', 'Redo', () => chain().redo().run(), undefined, !can((e) => e.can().redo()))}
 </div>
 {#if pasteProblem}
     <p class="small muted" role="alert">{pasteProblem}</p>

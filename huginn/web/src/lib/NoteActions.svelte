@@ -49,6 +49,12 @@
             <FolderPicker rows={tree} current={place} onpick={(folder) => run(() => index.moveNotes([id], folder))} />
             <button class="btn" type="button" onclick={() => (moving = false)}>Cancel</button>
         {:else}
+            <button
+                class="btn"
+                type="button"
+                title="Ctrl+F"
+                onclick={() => run(() => dispatchEvent(new CustomEvent('huginn:find')))}>Find in note</button
+            >
             <a class="btn" href={remindMeHref(id, shownTitle)}>Remind me about this note…</a>
             <button class="btn" type="button" onclick={() => (moving = true)}>Move to folder…</button>
             {#if $hasChecklist}

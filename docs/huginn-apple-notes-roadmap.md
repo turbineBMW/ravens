@@ -12,7 +12,7 @@ As of November 15, 2026, at `2b233ff`:
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
 | P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. Find in note (PR #20) passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
 | P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -278,7 +278,11 @@ A first version had a folder view (`?folder=<id>`) that the list narrowed to, wi
 
 **Surface Pro 11, November 15, 2026, deployed to the mini:** passed.
 
-Still to do in this phase: find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
+**Fifth increment, PR #20:** find in note. Ctrl+F (⌘F) anywhere in the open note, or *Find in note* in its menu, opens a field under the toolbar, which stays in view with it; text selected on one line is what's looked for, and otherwise the last thing was. As in search, case and accents don't matter (`find.ts`: `cafe` finds `Café`), but it's a phrase, not words. Every match is highlighted and counted (*3 of 12*), in the order they're shown: the body's text, tables cell by cell, and checklist items, open then checked. The current one starts at the first match after the caret; Enter, the arrow buttons, F3 or Ctrl+G go to the next, with Shift the previous, wrapping at the ends, and it's brought into view, expanding any collapsed sections it's in (a section inside another included) and showing a checklist's checked items if it's among them. Checklist items are text fields, which can't highlight part of their text, so an item holding a match is tinted and the current one marked at its edge. The matches follow edits from this device or another, staying on the same match where it's still there. Escape closes it with the current match selected, so typing replaces it; the close button leaves the caret alone, so a phone's keyboard doesn't come up. The set title, in the header above, isn't searched. Finding is view state only: it edits nothing and nothing syncs. No format change.
+
+**Surface Pro 11, November 14, 2026, deployed to the mini:** passed.
+
+Still to do in this phase: list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers. Replace, as Apple Notes has with find, could follow find in note.
 
 ### Phase 4 — Attachments, capture, and portability
 
