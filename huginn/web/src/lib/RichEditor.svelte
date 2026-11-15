@@ -25,6 +25,8 @@
     import Icon from '$lib/Icon.svelte';
     import { Sections, revealPosition, revealSection, sectionAt } from '$lib/sections';
     import { Hashtags, type TypedTag } from '$lib/hashtags';
+    import { DataDetectors, type DetectedAt } from '$lib/dataDetectors';
+    import DetectedMenu from '$lib/DetectedMenu.svelte';
     import Suggest, { type Suggestion } from '$lib/Suggest.svelte';
     import { NoteLink, attrsOf, type TypedLink } from '$lib/noteLinkNode';
     import { linkText, parseNoteUrl, suggestHeadings, suggestNotes, type LinkAttrs } from '$lib/noteLinks';
@@ -146,11 +148,31 @@
         const content = [{ type: 'noteLink', attrs }, ...(space ? [{ type: 'text', text: space }] : [])];
         editor.chain().focus().insertContentAt({ from, to }, content).run();
     }
-    /** Keep the suggestions under what's typed as the note scrolls. */
+    /** Keep the suggestions under what's typed, and the menu under what it's for, as the note scrolls. */
     function follow() {
         if (!editor) return;
         if (typingTag) typingTag = { ...typingTag, ...editor.view.coordsAtPos(typingTag.from) };
         if (typingLink) typingLink = { ...typingLink, ...editor.view.coordsAtPos(typingLink.from) };
+        if (detected) {
+            const { left, top } = editor.view.coordsAtPos(detected.from);
+            detected = { ...detected, left, top, bottom: editor.view.coordsAtPos(detected.to).bottom };
+        }
+    }
+
+    // An address, a phone number or a link that was clicked, tapped, or asked for with Alt+Enter.
+    let detected = $state<(DetectedAt & Where & { byKeyboard: boolean }) | null>(null);
+    function closeDetected(refocus: boolean) {
+        detected = null;
+        if (refocus) editor?.commands.focus();
+    }
+    /** Edit link, from its menu: the link selected, so the Link tool edits it. */
+    function editDetected() {
+        if (!editor || !detected) return;
+        const { from, to } = detected;
+        detected = null;
+        editor.chain().focus().setTextSelection({ from, to }).run();
+        linkOpen = false;
+        toggleLinkField();
     }
 
     // Links to notes: what they say follows the index, and they open in place.
@@ -491,7 +513,8 @@
         const created = new Editor({
             element: host,
             extensions: [
-                StarterKit.configure({ undoRedo: false }),
+                // A click on a link shows its menu (see dataDetectors.ts) rather than opening it.
+                StarterKit.configure({ undoRedo: false, link: { openOnClick: false, defaultProtocol: 'https' } }),
                 Highlight,
                 TableKit.configure({ table: { resizable: false } }),
                 Placeholder.configure({ placeholder: 'Start writing' }),
@@ -518,12 +541,21 @@
                     onTyping: onTypingLink,
                     onKey,
                 }),
+                DataDetectors.configure({
+                    onOpen: (found, byKeyboard) => (detected = { ...found, byKeyboard }),
+                }),
                 FindInNote.configure({ itemsOf: (list) => get(note.list(list).items) }),
                 Collaboration.configure({ fragment: note.body, yUndoOptions: { undoManager: undo } }),
             ],
-            onTransaction: ({ editor: ed }) => {
+            onTransaction: ({ editor: ed, transaction }) => {
                 revision++;
                 tellBlocks(ed);
+                // The menu is for what was there: an edit, or the caret leaving it, puts it away.
+                if (detected) {
+                    const { from, to } = ed.state.selection;
+                    const left = transaction.selectionSet && (from < detected.from || to > detected.to);
+                    if (transaction.docChanged || left) detected = null;
+                }
             },
         });
         editor = created;
@@ -719,6 +751,17 @@
     </form>
 {/if}
 <div bind:this={host}></div>
+{#if detected}
+    <DetectedMenu
+        found={detected}
+        byKeyboard={detected.byKeyboard}
+        left={detected.left}
+        top={detected.top}
+        bottom={detected.bottom}
+        onclose={closeDetected}
+        onedit={editDetected}
+    />
+{/if}
 {#if typing && suggestions.length}
     <Suggest
         label={typingLink ? 'Notes to link to' : 'Tags already used'}

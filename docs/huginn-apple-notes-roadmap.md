@@ -4,7 +4,7 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 15, 2026, at `2b233ff`:
+As of November 15, 2026, at `47041a8`:
 
 | Phase | State |
 | --- | --- |
@@ -12,7 +12,7 @@ As of November 15, 2026, at `2b233ff`:
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
 | P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. Find in note (PR #20) passed on the Surface. Links between notes, with backlinks (PR #21, format 5), passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. Tags, with suggestions while typing (PR #18), passed on the Surface. Smart Folders (PR #19) passed on the Surface. Find in note (PR #20) passed on the Surface. Links between notes, with backlinks (PR #21, format 5), passed on the Surface. Detected addresses and phone numbers (PR #22), the last required item, deployed to the mini with links checked. See [Phase 3](#phase-3--organization-and-finding-things). |
 | P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -288,7 +288,11 @@ Dropped, November 14, 2026: list options (a gallery view, grouping by date, sort
 
 **Surface Pro 11, November 14, 2026, deployed to the mini:** passed.
 
-Still to do in this phase: detecting emails, URLs and phone numbers. Replace, as Apple Notes has with find, could follow find in note.
+**Seventh increment, PR #22:** web addresses, email addresses and phone numbers in a note's text are underlined, as Apple Notes does, in the text's own colour (`detect.ts`, `dataDetectors.ts`). They're found where the note is shown, as tags are, and never stored, so notes written before this, or on another device, are detected the same way. Addresses are found by linkify, as the editor's own links are, with a bare name ending in a file extension that's also a domain (`README.md`) left alone, and an address at a host with no dot (`me@localhost`) too. Phone numbers are kept strict, so dates, times, versions, IP addresses and part numbers aren't taken for one: a number with `+` and a country code, 8 to 15 digits, or a North American one in three parts (`555-123-4567`, `(555) 123-4567`, `555.123.4567`, `1 555 123 4567`), and not inside a longer run of digits, letters or dashes. A number in a web address is part of the address. Text in code or already in a link isn't looked through. A click or tap on one, or on a link, shows a menu under it: *Open link*, *Send email*, or *Call* and *Send message*, then *Copy* (the address, or the number as written), and for a link *Edit link*, which selects it and opens the Link field. The caret still goes where it was clicked, so these can be edited like any text, and a link no longer opens on a click; Ctrl+click (⌘-click) opens one at once. Alt+Enter opens the menu for the one at the caret, with its first action focused, the arrows moving and Escape going back to the note. An edit, here or from another device, or the caret leaving it, puts the menu away. Web pages open in a new tab; mail, calls and messages go to whichever app handles `mailto:`, `tel:` and `sms:` on the device. New links typed or pasted without a scheme get `https://`. Accepted limit: checklist items are text fields, so nothing's detected in them. No format change, nothing on the server.
+
+**November 15, 2026, deployed to the mini:** links checked and working.
+
+Still to do in this phase: nothing required. Replace, as Apple Notes has with find, could follow find in note.
 
 ### Phase 4 — Attachments, capture, and portability
 

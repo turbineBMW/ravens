@@ -742,6 +742,53 @@ otherDevice.destroy();
 }
 
 {
+    // Addresses and phone numbers found in text, and nothing that only looks like one.
+    const { actionsFor, copyText, detectIn } = lib('detect');
+    const found = (text) => detectIn(text).map((d) => [d.kind, d.text, d.href]);
+    assert.deepEqual(found('Call 555-123-4567, (555) 123-4567 or 1 555 123 4567.'), [
+        ['phone', '555-123-4567', 'tel:5551234567'],
+        ['phone', '(555) 123-4567', 'tel:5551234567'],
+        ['phone', '1 555 123 4567', 'tel:15551234567'],
+    ]);
+    assert.deepEqual(found('UK +44 20 7946 0958; US +1 (555) 123-4567.'), [
+        ['phone', '+44 20 7946 0958', 'tel:+442079460958'],
+        ['phone', '+1 (555) 123-4567', 'tel:+15551234567'],
+    ]);
+    assert.deepEqual(
+        found(
+            'On 2026-11-15 at 12:30, v1.2.3, 192.168.100.1000, part ABC-555-123-4567, 555-123-45678, ' +
+                '12555-123-4567, 555.123.4567.8, +1 23, +1 (555 123 4567',
+        ),
+        [],
+        'dates, times, versions, addresses, part numbers and longer runs of digits are not phone numbers',
+    );
+    assert.deepEqual(found('See example.com/a?b=1, https://x.org/(a). www.foo.co.uk/p#x'), [
+        ['url', 'example.com/a?b=1', 'https://example.com/a?b=1'],
+        ['url', 'https://x.org/(a)', 'https://x.org/(a)'],
+        ['url', 'www.foo.co.uk/p#x', 'https://www.foo.co.uk/p#x'],
+    ]);
+    assert.deepEqual(found('Mail me@host.com. Not fixme@localhost, README.md, javascript:alert(1)'), [
+        ['email', 'me@host.com', 'mailto:me@host.com'],
+    ]);
+    assert.deepEqual(
+        found('https://x.org/call/555-123-4567'),
+        [['url', 'https://x.org/call/555-123-4567', 'https://x.org/call/555-123-4567']],
+        'a number in an address is part of it',
+    );
+    assert.deepEqual(
+        detectIn('a\ufffcme@host.com').map((d) => d.at),
+        [2],
+        'positions count as JavaScript does, past what stands in for a link',
+    );
+    assert.deepEqual(
+        actionsFor('phone', 'tel:+15551234567').map((a) => a.href),
+        ['tel:+15551234567', 'sms:+15551234567'],
+    );
+    assert.equal(copyText('email', 'mailto:me@host.com', 'me@host.com'), 'me@host.com');
+    assert.equal(copyText('phone', 'tel:5551234567', '(555) 123-4567'), '(555) 123-4567', 'as written');
+}
+
+{
     // Tags: the same cases as the server's tags.rs, which must agree.
     const { cleanTag, retag, tagMatches } = lib('tags');
     const names = (text) => tagMatches(text).map((m) => m.name);
@@ -1196,7 +1243,7 @@ assert.equal(newer.renameTag('anything', 'else'), false);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), find in note (folding, offsets, order, keeping its place), note links (what they say, URLs, typing, suggestions, backlinks, format 5, as text), plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), find in note (folding, offsets, order, keeping its place), note links (what they say, URLs, typing, suggestions, backlinks, format 5, as text), addresses and phone numbers detected, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

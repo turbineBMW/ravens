@@ -895,6 +895,90 @@ async function main() {
     await until(page.js, `document.querySelector('.tiptap').textContent.endsWith('for Home #Chores ')`);
     await until(page.js, `!document.querySelector('.tag-filter') && ${drawerTags} === '#Chores 1'`, 20_000);
 
+    // Addresses and phone numbers: underlined where they're written, but not stored; a click or tap
+    // shows what can be done with one, a link's menu edits it, and Alt+Enter opens the menu at the
+    // caret from the keyboard.
+    await page.js(
+        `document.querySelector('.tiptap').editor.chain().focus('end').insertContent('<p>Ring 555-123-4567, mail me@host.com, see <a href="https://example.com/">the site</a>, not README.md</p>').run()`,
+    );
+    const detectedText = `[...document.querySelectorAll('.tiptap .detected')].map((d) => d.dataset.kind + ':' + d.textContent).join()`;
+    await until(page.js, `${detectedText} === 'phone:555-123-4567,email:me@host.com'`);
+    assert.equal(
+        await page.js(`(() => {
+            let marks = -1;
+            document.querySelector('.tiptap').editor.state.doc.descendants((n) => {
+                if (n.isText && n.text.includes('me@host.com')) marks = n.marks.length;
+            });
+            return marks;
+        })()`),
+        0,
+        'nothing detected is written into the note',
+    );
+    const centreOf = (selector) =>
+        page.js(`(() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            el.scrollIntoView({ block: 'center' });
+            const r = el.getBoundingClientRect();
+            return [r.x + r.width / 2, r.y + r.height / 2];
+        })()`);
+    const menuItems = `[...document.querySelectorAll('.detected-menu [role=menuitem]')].map((b) => b.textContent.trim()).join()`;
+    await page.stroke([await centreOf('.tiptap .detected[data-kind="phone"]')]);
+    await until(page.js, `${menuItems} === 'Call,Send message,Copy number'`);
+    assert.equal(await page.js(`document.querySelector('.detected-menu').getAttribute('aria-label')`), '555-123-4567');
+    assert.ok(await page.js(`!!document.activeElement.closest('.tiptap')`), 'a click leaves the caret in the note');
+    await page.key('Escape', 27);
+    await until(page.js, `!document.querySelector('.detected-menu')`);
+    await page.stroke([await centreOf('.tiptap a[href="https://example.com/"]')]);
+    await until(page.js, `${menuItems} === 'Open link,Copy link,Edit link'`);
+    await press('.detected-menu [role=menuitem]', 'Edit link');
+    await until(
+        page.js,
+        `!document.querySelector('.detected-menu') && document.querySelector('.link-field input')?.value === 'https://example.com/'`,
+    );
+    await page.js(`document.querySelector('.link-field').requestSubmit()`);
+    await until(page.js, `!document.querySelector('.link-field')`);
+    await page.js(`(() => {
+        const ed = document.querySelector('.tiptap').editor;
+        let at = 0;
+        ed.state.doc.descendants((n, pos) => {
+            if (n.isText && n.text.includes('me@host.com')) at = pos + n.text.indexOf('me@host.com') + 3;
+        });
+        ed.chain().focus().setTextSelection(at).run();
+    })()`);
+    await until(page.js, `!!document.activeElement.closest('.tiptap')`);
+    await page.key('Enter', 13, 1);
+    await until(page.js, `${menuItems} === 'Send email,Copy address'`);
+    await until(page.js, `document.activeElement.textContent.trim() === 'Send email'`);
+    await page.key('ArrowDown', 40);
+    await until(page.js, `document.activeElement.textContent.trim() === 'Copy address'`);
+    await page.key('Escape', 27);
+    await until(page.js, `!document.querySelector('.detected-menu') && !!document.activeElement.closest('.tiptap')`);
+    assert.ok(
+        (await page.js(`document.querySelector('.tiptap').textContent`)).includes('Ring 555-123-4567'),
+        'Alt+Enter edited nothing',
+    );
+    // An edit, such as another device's, puts the menu away.
+    const ringLine = (js) =>
+        page.js(`(() => {
+            const ed = document.querySelector('.tiptap').editor;
+            let at = -1, size = 0;
+            ed.state.doc.descendants((n, pos) => {
+                if (n.type.name === 'paragraph' && /^(Do: )?Ring /.test(n.textContent)) [at, size] = [pos, n.nodeSize];
+            });
+            ${js}
+        })()`);
+    await page.key('Enter', 13, 1);
+    await until(page.js, `!!document.querySelector('.detected-menu')`);
+    await ringLine(`ed.view.dispatch(ed.state.tr.insertText('Do: ', at + 1));`);
+    await until(page.js, `!document.querySelector('.detected-menu')`);
+    await ringLine(`ed.view.dispatch(ed.state.tr.delete(at, at + size));`);
+    await until(page.js, `!document.querySelector('.tiptap .detected')`);
+    // Saved, and past the notes list fetching the tags again after an edit (1.5 s), so the Smart
+    // Folder below starts from the tag list as it settles.
+    await until(page.js, subtitleIs('Saved'));
+    await sleep(2500);
+    await until(page.js, `${drawerTags} === '#Chores 1'`);
+
     // Smart Folders: made from the main menu with a tag and an open checklist, at the top of the
     // tree and collapsed, its notes under it when expanded as well as in their own place; changed
     // until nothing matches; one saved from the tag filter; both deleted, their notes staying put.

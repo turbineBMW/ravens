@@ -991,8 +991,16 @@ main.workspace {
     color: var(--accent);
     cursor: pointer;
 }
-/* The tags already used, under one being typed. */
-.tag-suggest {
+/* Addresses and phone numbers found in a note's text: underlined like a link, in the text's own colour. */
+.tiptap .detected {
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+/* The tags already used, under one being typed; what can be done with an address or a link. */
+.tag-suggest,
+.detected-menu {
     position: fixed;
     z-index: 50;
     display: grid;
@@ -1005,7 +1013,8 @@ main.workspace {
     background: var(--panel);
     box-shadow: var(--shadow);
 }
-.tag-suggest button {
+.tag-suggest button,
+.detected-menu button {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1021,8 +1030,23 @@ main.workspace {
     cursor: pointer;
 }
 .tag-suggest button:hover,
-.tag-suggest button[aria-selected='true'] {
+.tag-suggest button[aria-selected='true'],
+.detected-menu button:hover,
+.detected-menu button:focus-visible {
     background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.detected-menu {
+    width: 220px;
+}
+.detected-menu .detected-text {
+    margin: 0;
+    padding: 4px 10px 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.detected-menu button:focus-visible {
+    outline: none;
 }
 .tag-list {
     display: grid;
