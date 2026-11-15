@@ -91,6 +91,7 @@ drag-to-reorder and checked-to-the-bottom conflict-free.
 ```sh
 node scripts/sync-e2e.mjs            # against a running huginn-server on :8081
 node scripts/huginn-browser-test.mjs # headless Chromium against its own throwaway server
+node scripts/huginn-attachments-test.mjs # the same for attachments, export/import, capture, backups
 node scripts/seed-demo.mjs           # a demo grocery list for the dev user; prints the note id
 node scripts/seed-muninn.mjs ws://127.0.0.1:8082/muninn/v1/sync <note id>   # demo lists, one linked to that note
 ```
@@ -100,6 +101,16 @@ change to a document with the transaction and the database connection, to
 mirror what it needs into tables. Muninn mirrors its lists' tasks that way
 (`muninn/server/src/mirror.rs`); the documents stay the truth and the tables
 can be rebuilt from them.
+
+Attachments are the exception to everything being a Yjs document: a file's
+bytes never go into a note. Huginn keeps each one as a file in
+`RAVEN_BLOB_DIR` (by default `blobs` beside the database, so `/data/blobs` in
+the container's volume) with its record in SQLite, and a note's `attachment`
+block names it by id (`huginn/server/src/blobs.rs`, `huginn/web/src/lib/files.ts`).
+A device keeps the files it adds in IndexedDB until they're uploaded, in
+chunks that resume. `RAVEN_BLOB_MAX_BYTES` (200 MB) and
+`RAVEN_BLOB_QUOTA_BYTES` (20 GB) set the limits. To back up both:
+`python3 scripts/backup-db.py /data/raven.db NEW.db --blobs /data/blobs`.
 
 ## Notifications
 
@@ -142,4 +153,4 @@ criteria for each phase.
 5. Muninn lists, due dates, flags, subtasks, smart views; then notifications and the link.
 6. Huginn rich text (roadmap Phase 2, PRs #8–#10).
 7. Huginn ink (roadmap Phase 5, PRs #12–#15).
-8. Huginn organization and search, then attachments and export (roadmap Phases 3 and 4). **← here**
+8. Huginn organization and search, then attachments and export (roadmap Phases 3 and 4). **← here:** both built; Phase 4 awaits hardware checks.
