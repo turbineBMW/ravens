@@ -45,7 +45,14 @@
     }
     /** In a tab of its own, where the browser shows what it can. */
     function openElsewhere() {
-        if (url) window.open(url, '_blank', 'noopener');
+        // A page made here would be Huginn's own: whatever the file holds would run as Huginn.
+        // A PDF opens from here as a PDF and nothing else; anything else, from the server,
+        // which serves it sandboxed.
+        if (attrs.kind === 'pdf' && blob) {
+            const pdf = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+            window.open(pdf, '_blank', 'noopener');
+            setTimeout(() => URL.revokeObjectURL(pdf), 60_000);
+        } else window.open(serverUrl(attrs.blob), '_blank', 'noopener');
     }
     /** Put away: said at once and once, since the dialog's own close event comes later. */
     let closed = false;
