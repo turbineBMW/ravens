@@ -63,13 +63,26 @@
     let dialog: HTMLDialogElement;
     onMount(() => dialog.showModal());
 
+    /**
+     * Closed, by Save, Cancel or Escape: said once, and at once. The dialog's
+     * close event comes later, and a Smart Folder opened before it arrives
+     * would otherwise reuse this closed one, then lose it to that event.
+     */
+    let closed = false;
+    function finish() {
+        if (closed) return;
+        closed = true;
+        if (dialog.open) dialog.close();
+        onclose();
+    }
+
     function save(event: SubmitEvent) {
         event.preventDefault();
         if (!valid) return;
         const saved = $state.snapshot(conditions) as Condition[];
         if (folder) index.updateSmartFolder(folder.id, { name: name.trim(), match, conditions: saved });
         else index.createSmartFolder(name.trim(), match, saved);
-        dialog.close();
+        finish();
     }
     const KINDS: [Condition['kind'], string][] = [
         ['tag', 'Tag'],
@@ -84,7 +97,7 @@
 <dialog
     class="smart-editor"
     bind:this={dialog}
-    {onclose}
+    onclose={finish}
     aria-label={folder ? 'Edit Smart Folder' : 'New Smart Folder'}
 >
     <form onsubmit={save}>
@@ -164,7 +177,7 @@
             >Add condition</button
         >
         <div class="smart-buttons">
-            <button class="btn" type="button" onclick={() => dialog.close()}>Cancel</button>
+            <button class="btn" type="button" onclick={finish}>Cancel</button>
             <button class="btn primary" type="submit" disabled={!valid}>Save</button>
         </div>
     </form>
