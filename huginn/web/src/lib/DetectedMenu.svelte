@@ -19,6 +19,7 @@
         bottom,
         onclose,
         onedit,
+        onpreview,
     }: {
         found: DetectedAt;
         byKeyboard: boolean;
@@ -28,6 +29,8 @@
         /** `refocus`: put focus back in the note, as after Escape. */
         onclose: (refocus: boolean) => void;
         onedit: () => void;
+        /** Add a card for the page under the paragraph; absent where there can't be one. */
+        onpreview?: () => void;
     } = $props();
 
     const actions = $derived(
@@ -124,6 +127,11 @@
         onmousedown={(e) => !byKeyboard && e.preventDefault()}
         onclick={() => void copy()}>{copied ? 'Copied' : copyLabel}</button
     >
+    {#if onpreview && (found.kind === 'url' || (found.kind === 'link' && /^https?:/i.test(found.href)))}
+        <button type="button" role="menuitem" onmousedown={(e) => !byKeyboard && e.preventDefault()} onclick={onpreview}
+            >Add preview</button
+        >
+    {/if}
     {#if found.mark}
         <button type="button" role="menuitem" onmousedown={(e) => !byKeyboard && e.preventDefault()} onclick={onedit}
             >Edit link</button

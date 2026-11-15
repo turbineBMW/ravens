@@ -252,7 +252,7 @@ const open = (id) => {
 };
 const entry = (id) => get(fixtureIndex.notes).find((n) => n.id === id);
 const groceries = open(GROCERIES);
-assert.equal(NOTE_FORMAT, 5);
+assert.equal(NOTE_FORMAT, 6);
 assert.equal(get(groceries.tooNew), false, 'a note without a format is format 1');
 assert.equal(get(groceries.title), 'Groceries');
 assert.deepEqual(
@@ -1215,6 +1215,54 @@ otherDevice.destroy();
     assert.equal(get(later.format), NOTE_FORMAT + 1, 'a newer note is left alone');
 }
 
+{
+    // Attachments (format 6): raising the format, what they say as text, the list's picture.
+    const attachIndex = openIndex();
+    const id = attachIndex.create('text');
+    const note = openNote(id, attachIndex);
+    note.initialise();
+    note.allowLinks();
+    note.allowAttachments();
+    assert.equal(get(note.format), 6);
+    note.allowLinks();
+    assert.equal(get(note.format), 6, 'a link after an attachment keeps format 6');
+    const block = (attrs) => {
+        const el = new Y.XmlElement('attachment');
+        for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+        return el;
+    };
+    note.doc.doc.transact(() => {
+        note.body.get(0).insert(0, [new Y.XmlText('Site visit')]);
+        const list = new Y.XmlElement('bulletList');
+        const item = new Y.XmlElement('listItem');
+        // An image inside a list still counts as the note's first.
+        item.insert(0, [block({ blob: 'img1', kind: 'image', name: 'blade.jpg', thumb: 'th1' })]);
+        list.insert(0, [item]);
+        note.body.insert(1, [
+            block({ blob: 'doc1', kind: 'pdf', name: 'manual.pdf' }),
+            list,
+            block({ blob: 'img2', kind: 'image', name: 'small.png' }),
+            block({ blob: 'lnk1', kind: 'link', url: 'https://example.com/', title: 'Example' }),
+            block({ blob: 'f1', kind: 'file', name: 'data.csv' }),
+        ]);
+    });
+    assert.equal(
+        note.plainText(),
+        'Site visit\n[PDF: manual.pdf]\n- [Image: blade.jpg]\n[Image: small.png]\n[Link: Example https://example.com/]\n[File: data.csv]\n',
+    );
+    note.repairIndex();
+    const entry = get(attachIndex.notes).find((n) => n.id === id);
+    assert.equal(entry.title, 'Site visit', 'an attachment is never the title');
+    assert.equal(entry.preview, '', 'nor the preview');
+    assert.equal(entry.picture, 'th1', "the first image's thumbnail");
+    note.doc.doc.transact(() => note.body.delete(1, 2));
+    note.repairIndex();
+    assert.equal(get(attachIndex.notes).find((n) => n.id === id).picture, 'img2', 'a small image is its own');
+    note.doc.doc.transact(() => note.body.delete(1, 1));
+    note.repairIndex();
+    assert.equal(get(attachIndex.notes).find((n) => n.id === id).picture, '', 'none left');
+}
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
@@ -1243,7 +1291,7 @@ assert.equal(newer.renameTag('anything', 'else'), false);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), find in note (folding, offsets, order, keeping its place), note links (what they say, URLs, typing, suggestions, backlinks, format 5, as text), addresses and phone numbers detected, plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), find in note (folding, offsets, order, keeping its place), note links (what they say, URLs, typing, suggestions, backlinks, format 5, as text), attachments (format 6, as text, the notes list picture), addresses and phone numbers detected, plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

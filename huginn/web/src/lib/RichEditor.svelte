@@ -27,6 +27,11 @@
     import { Hashtags, type TypedTag } from '$lib/hashtags';
     import { DataDetectors, type DetectedAt } from '$lib/dataDetectors';
     import DetectedMenu from '$lib/DetectedMenu.svelte';
+    import { Attachment, type AttachmentAttrs } from '$lib/attachmentNode.svelte';
+    import AttachmentViewer from '$lib/AttachmentViewer.svelte';
+    import { addFile, DeviceFull, sizeText, usage } from '$lib/files';
+    import { describe } from '$lib/thumbs';
+    import { newId } from '@ravens/ui/sync';
     import Suggest, { type Suggestion } from '$lib/Suggest.svelte';
     import { NoteLink, attrsOf, type TypedLink } from '$lib/noteLinkNode';
     import { linkText, parseNoteUrl, suggestHeadings, suggestNotes, type LinkAttrs } from '$lib/noteLinks';
@@ -40,10 +45,26 @@
 
     let host: HTMLElement;
 
-    /** A link (from a reminder or a search) may name a section to open the note at. */
+    /** A link (from a reminder, a search or the attachments) may name a section or an attachment to open the note at. */
     function revealLinkedSection() {
         const target = decodeURIComponent(location.hash.slice(1));
         if (editor && target.startsWith('section-')) revealSection(editor.view, target.slice('section-'.length));
+        if (editor && target.startsWith('attachment-')) {
+            const blob = target.slice('attachment-'.length);
+            let at = -1;
+            editor.state.doc.descendants((node, pos) => {
+                if (at < 0 && node.type.name === 'attachment' && node.attrs.blob === blob) at = pos;
+                return at < 0;
+            });
+            if (at < 0) return;
+            revealPosition(editor.view, at);
+            editor.commands.setNodeSelection(at);
+            void tick().then(() =>
+                editor?.view.dom
+                    .querySelector(`.note-attachment[data-blob="${CSS.escape(blob)}"]`)
+                    ?.scrollIntoView({ block: 'center' }),
+            );
+        }
     }
     let editor = $state.raw<Editor | null>(null);
 
@@ -165,6 +186,15 @@
         detected = null;
         if (refocus) editor?.commands.focus();
     }
+    /** A card for the page a detected address or link goes to, under the paragraph it's in. */
+    async function previewDetected() {
+        if (!editor || !detected) return;
+        const url = detected.href;
+        const end = editor.state.doc.resolve(detected.to).after(1);
+        detected = null;
+        await addPreview(url, end);
+    }
+
     /** Edit link, from its menu: the link selected, so the Link tool edits it. */
     function editDetected() {
         if (!editor || !detected) return;
@@ -367,6 +397,110 @@
         setTimeout(() => (copied = false), 1500);
     }
 
+    // Attachments: added from the toolbar, the camera, a paste or a drop; shown whole in the viewer.
+    let viewing = $state<AttachmentAttrs | null>(null);
+    let attachInput = $state<HTMLInputElement>();
+    let cameraInput = $state<HTMLInputElement>();
+    let attaching = $state('');
+    /** The server's limit, as last heard; until then, its default. */
+    let maxFile = 200 * 1024 * 1024;
+
+    /** What a file with no name of its own is called: a pasted screenshot, a photo. */
+    function nameFor(file: File, kind: string) {
+        if (file.name && file.name !== 'image.png') return file.name;
+        const ext = (file.type.split('/')[1] ?? 'bin').replace('jpeg', 'jpg').replace(/[^a-z0-9]/g, '');
+        const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '.');
+        return `${kind === 'image' ? 'Image' : 'File'} ${stamp}.${ext}`;
+    }
+
+    /** Keep the files here, queue them for the server, and put them in the note: at `at`, or at the caret. */
+    async function insertFiles(files: File[], at?: number) {
+        if (!editor || !files.length || get(note.tooNew)) return;
+        pasteProblem = '';
+        const nodes: { type: 'attachment'; attrs: Partial<AttachmentAttrs> }[] = [];
+        for (const file of files) {
+            if (file.size > maxFile) {
+                pasteProblem = `“${file.name}” is ${sizeText(file.size)}; attachments can be up to ${sizeText(maxFile)}.`;
+                continue;
+            }
+            attaching = files.length > 1 ? `Adding ${nodes.length + 1} of ${files.length}…` : 'Adding…';
+            try {
+                const made = await describe(file, file.name);
+                const blob = await addFile(file);
+                const thumb = made.thumb ? await addFile(made.thumb) : '';
+                nodes.push({
+                    type: 'attachment',
+                    attrs: {
+                        blob,
+                        kind: made.kind,
+                        name: nameFor(file, made.kind),
+                        type: file.type || 'application/octet-stream',
+                        size: file.size,
+                        width: made.width,
+                        height: made.height,
+                        pages: made.pages,
+                        thumb,
+                    },
+                });
+            } catch (err) {
+                pasteProblem = err instanceof DeviceFull ? err.message : `Couldn’t add “${file.name}”.`;
+            }
+        }
+        attaching = '';
+        if (!nodes.length || !editor) return;
+        note.allowAttachments();
+        if (at !== undefined) editor.chain().focus().insertContentAt(at, nodes).run();
+        else editor.chain().focus().command(pastBlock).insertContent(nodes).command(pastBlock).run();
+    }
+
+    function pickFiles(input: HTMLInputElement) {
+        const files = [...(input.files ?? [])];
+        input.value = '';
+        void insertFiles(files);
+    }
+
+    /** A card for a web page: its title, description and image, fetched by the server, which keeps it to public pages. */
+    async function addPreview(url: string, at: number) {
+        if (!editor) return;
+        pasteProblem = '';
+        attaching = 'Getting a preview…';
+        try {
+            const res = await fetch(`${base}/v1/preview?${new URLSearchParams({ url })}`);
+            if (!res.ok) throw new Error((await res.text()) || 'no preview');
+            const page = (await res.json()) as { url: string; title: string; description: string; image?: string };
+            let thumb = '';
+            if (page.image) {
+                const img = await fetch(`${base}/v1/preview/image?${new URLSearchParams({ url: page.image })}`).catch(
+                    () => null,
+                );
+                if (img?.ok) thumb = await addFile(await img.blob()).catch(() => '');
+            }
+            note.allowAttachments();
+            editor
+                .chain()
+                .focus()
+                .insertContentAt(Math.min(at, editor.state.doc.content.size), {
+                    type: 'attachment',
+                    attrs: {
+                        // A preview names no file; the id is its own, for the attachments list.
+                        blob: newId(),
+                        kind: 'link',
+                        url: page.url || url,
+                        title: page.title,
+                        description: page.description,
+                        thumb,
+                    },
+                })
+                .run();
+        } catch (err) {
+            pasteProblem = navigator.onLine
+                ? `Couldn’t get a preview of that page: ${err instanceof Error ? err.message : 'no answer'}.`
+                : 'Previews need a connection.';
+        } finally {
+            attaching = '';
+        }
+    }
+
     let pasteProblem = $state('');
     async function pastePlain() {
         pasteProblem = '';
@@ -379,10 +513,11 @@
         }
     }
 
-    /** Step off a selected checklist or drawing, so what's inserted next goes after it, not over it. */
+    /** Step off a selected checklist, drawing or attachment, so what's inserted next goes after it, not over it. */
     function pastBlock({ tr, dispatch }: CommandProps) {
         const { selection } = tr;
-        const atom = selection instanceof NodeSelection && ['checklist', 'ink'].includes(selection.node.type.name);
+        const atom =
+            selection instanceof NodeSelection && ['checklist', 'ink', 'attachment'].includes(selection.node.type.name);
         if (atom && dispatch) {
             tr.setSelection(TextSelection.near(tr.doc.resolve(selection.to), 1));
         }
@@ -544,9 +679,33 @@
                 DataDetectors.configure({
                     onOpen: (found, byKeyboard) => (detected = { ...found, byKeyboard }),
                 }),
+                Attachment.configure({
+                    open: (attrs) => (viewing = attrs),
+                    onAttach: note.allowAttachments,
+                    needsFormat: () => get(note.format) < NOTE_FORMAT,
+                }),
                 FindInNote.configure({ itemsOf: (list) => get(note.list(list).items) }),
                 Collaboration.configure({ fragment: note.body, yUndoOptions: { undoManager: undo } }),
             ],
+            editorProps: {
+                // Files pasted or dropped become attachments; anything else is pasted as usual.
+                handlePaste: (_view, event) => {
+                    const files = [...(event.clipboardData?.files ?? [])];
+                    if (!files.length) return false;
+                    // After the block that's selected, as the toolbar adds them, never over it.
+                    void insertFiles(files);
+                    return true;
+                },
+                handleDrop: (view, event, _slice, moved) => {
+                    const files = [...(event.dataTransfer?.files ?? [])];
+                    if (moved || !files.length) return false;
+                    const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+                    // At the start of the block it's dropped on, not inside its text.
+                    const pos = at ? view.state.doc.resolve(at.pos) : null;
+                    void insertFiles(files, pos && pos.depth > 0 ? pos.before(1) : at?.pos);
+                    return true;
+                },
+            },
             onTransaction: ({ editor: ed, transaction }) => {
                 revision++;
                 tellBlocks(ed);
@@ -560,6 +719,7 @@
         });
         editor = created;
         revealLinkedSection();
+        void usage().then((u) => u && (maxFile = u.max_file));
         // Following a link to another section of this note may only change the hash.
         addEventListener('hashchange', revealLinkedSection);
         addEventListener('scroll', follow, true);
@@ -666,6 +826,8 @@
                 .command(pastBlock)
                 .run(),
         )}
+        {@render tool('Attach file', 'Attach', () => attachInput?.click())}
+        {@render tool('Take a photo or video', 'Camera', () => cameraInput?.click())}
         {@render tool('Add table', 'Table', () =>
             chain().command(pastBlock).insertTable({ rows: 2, cols: 2, withHeaderRow: false }).run(),
         )}
@@ -724,6 +886,18 @@
         </div>
     {/if}
 </div>
+<input bind:this={attachInput} type="file" multiple hidden onchange={(e) => pickFiles(e.currentTarget)} />
+<input
+    bind:this={cameraInput}
+    type="file"
+    accept="image/*,video/*"
+    capture="environment"
+    hidden
+    onchange={(e) => pickFiles(e.currentTarget)}
+/>
+{#if attaching}
+    <p class="small muted" role="status">{attaching}</p>
+{/if}
 {#if pasteProblem}
     <p class="small muted" role="alert">{pasteProblem}</p>
 {/if}
@@ -760,7 +934,11 @@
         bottom={detected.bottom}
         onclose={closeDetected}
         onedit={editDetected}
+        onpreview={() => void previewDetected()}
     />
+{/if}
+{#if viewing}
+    <AttachmentViewer attrs={viewing} onclose={() => (viewing = null)} />
 {/if}
 {#if typing && suggestions.length}
     <Suggest

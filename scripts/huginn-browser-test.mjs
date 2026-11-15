@@ -932,7 +932,7 @@ async function main() {
     await page.key('Escape', 27);
     await until(page.js, `!document.querySelector('.detected-menu')`);
     await page.stroke([await centreOf('.tiptap a[href="https://example.com/"]')]);
-    await until(page.js, `${menuItems} === 'Open link,Copy link,Edit link'`);
+    await until(page.js, `${menuItems} === 'Open link,Copy link,Add preview,Edit link'`);
     await press('.detected-menu [role=menuitem]', 'Edit link');
     await until(
         page.js,

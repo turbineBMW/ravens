@@ -10,6 +10,7 @@
     import SketchThumb from '$lib/SketchThumb.svelte';
     import SmartFolderActions from '$lib/SmartFolderActions.svelte';
     import SmartFolderEditor from '$lib/SmartFolderEditor.svelte';
+    import PictureThumb from '$lib/PictureThumb.svelte';
     import { describe, matches, type Condition, type SmartFolder } from '$lib/smartFolders';
     import TagChip from '$lib/TagChip.svelte';
     import { filterByTag, refreshTags, tagFilter, tags, tagsFresh } from '$lib/tags';
@@ -580,7 +581,9 @@
                                 >
                             {/if}
                         </span>
-                        {#if n.sketch}<SketchThumb bytes={n.sketch} />{/if}
+                        {#if n.picture}<PictureThumb id={n.picture} />{:else if n.sketch}<SketchThumb
+                                bytes={n.sketch}
+                            />{/if}
                     {/snippet}
                     <div
                         class="note-row"
