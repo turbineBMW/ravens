@@ -412,7 +412,11 @@ async function main() {
         input.form.requestSubmit();
     })()`);
     await until(page.js, `JSON.parse(${attachments})[0].alt === 'Blade root, teal'`);
-    assert.equal(await page.js(`document.querySelector('.note-attachment img').alt`), 'Blade root, teal');
+    assert.equal(
+        await page.js(`document.querySelector('.note-attachment[data-blob="${big.blob}"] img').alt`),
+        'Blade root, teal',
+        'and the picture stays shown while it changes',
+    );
     await until(async () => {
         const hits = await (await fetch(`${API}/search?q=blade`)).json();
         return hits.some((h) => h.note === noteId);

@@ -40,22 +40,25 @@
     const isLink = $derived(attrs.kind === 'link');
     const none = readable<string | null>(null);
     /** What's shown in the column: the thumbnail, or a small image itself. */
-    const picture: Readable<string | null> = $derived(
-        attrs.thumb ? fileUrl(attrs.thumb) : attrs.kind === 'image' ? fileUrl(attrs.blob) : none,
-    );
+    // By id, so a change to anything else (alt text, say) keeps the picture shown rather than loading it again.
+    const pictureId = $derived(attrs.thumb || (attrs.kind === 'image' ? attrs.blob : ''));
+    const fileId = $derived(isLink ? '' : attrs.blob);
+    const isVideo = $derived(attrs.kind === 'video');
+    const picture: Readable<string | null> = $derived(pictureId ? fileUrl(pictureId) : none);
     const status: Readable<FileStatus> = $derived(
-        isLink ? readable({ state: 'stored', progress: 1, error: '' } as FileStatus) : fileStatus(attrs.blob),
+        fileId ? fileStatus(fileId) : readable({ state: 'stored', progress: 1, error: '' } as FileStatus),
     );
     /** A video plays from this device when it's here, otherwise straight from the server, seeking as it goes. */
     let videoSrc = $state<string | null>(null);
     let localVideo: string | null = null;
     $effect(() => {
-        if (attrs.kind !== 'video') return;
+        const id = isVideo ? fileId : '';
+        if (!id) return;
         let gone = false;
-        void isLocal(attrs.blob).then(async (here) => {
+        void isLocal(id).then(async (here) => {
             if (gone) return;
-            if (!here) return (videoSrc = serverUrl(attrs.blob));
-            const blob = await fileBlob(attrs.blob);
+            if (!here) return (videoSrc = serverUrl(id));
+            const blob = await fileBlob(id);
             if (gone || !blob) return;
             localVideo = URL.createObjectURL(blob);
             videoSrc = localVideo;
