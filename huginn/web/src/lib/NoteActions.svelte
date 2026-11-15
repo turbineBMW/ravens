@@ -6,6 +6,8 @@
     import Icon from '$lib/Icon.svelte';
     import { remindMeHref } from '$lib/links';
     import type { Index, Note } from '$lib/notes';
+    import { exportNote, printNote, save } from '$lib/noteExport';
+    import Report from '$lib/Report.svelte';
 
     let { note, id, ondelete }: { note: Note; id: string; ondelete: () => void } = $props();
 
@@ -32,6 +34,32 @@
         link.download = `${shownTitle.replace(/[/\\?%*:|"<>]/g, '-').slice(0, 80)}.txt`;
         link.click();
         URL.revokeObjectURL(url);
+    }
+
+    let report = $state<{ title: string; lines: string[] } | null>(null);
+    let working = $state('');
+    async function exportAs(as: 'md' | 'html') {
+        menu.open = false;
+        working = 'Exporting…';
+        try {
+            const file = await exportNote(note, index, shownTitle, as);
+            save(file);
+            if (file.lost.length) report = { title: 'Exported, with some changes', lines: file.lost };
+        } catch {
+            report = { title: 'Couldn’t export the note', lines: [] };
+        } finally {
+            working = '';
+        }
+    }
+    async function print() {
+        menu.open = false;
+        working = 'Preparing to print…';
+        try {
+            const lost = await printNote(note, index, shownTitle);
+            if (lost.length) report = { title: 'Printed, with some changes', lines: lost };
+        } finally {
+            working = '';
+        }
     }
 
     function run(action: () => void) {
@@ -64,6 +92,9 @@
                 >
             {/if}
             <button class="btn" type="button" onclick={() => run(exportText)}>Export as text</button>
+            <button class="btn" type="button" onclick={() => void exportAs('md')}>Export as Markdown</button>
+            <button class="btn" type="button" onclick={() => void exportAs('html')}>Export as HTML</button>
+            <button class="btn" type="button" onclick={() => void print()}>Print or save as PDF…</button>
             {#if confirmDelete}
                 <button class="btn danger" type="button" onclick={ondelete}>Move to Recently Deleted</button>
                 <button class="btn" type="button" onclick={() => (confirmDelete = false)}>Keep it</button>
@@ -73,3 +104,7 @@
         {/if}
     </div>
 </details>
+{#if working}<span class="small muted" role="status">{working}</span>{/if}
+{#if report}
+    <Report title={report.title} lines={report.lines} onclose={() => (report = null)} />
+{/if}

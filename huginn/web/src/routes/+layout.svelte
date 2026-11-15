@@ -7,6 +7,7 @@
     import { openIndex } from '$lib/notes';
     import { page } from '$app/state';
     import NotesList from '$lib/NotesList.svelte';
+    import { sizeText, startUploads, usage, type Usage } from '$lib/files';
 
     let { children } = $props();
 
@@ -39,6 +40,8 @@
         offline: 'Library offline. Reconnect to sync with other devices.',
     };
 
+    let storage = $state<Usage | null>(null);
+
     async function install() {
         await installPrompt?.prompt();
         installPrompt = null;
@@ -59,6 +62,9 @@
             (h) => (health = h),
             () => undefined,
         );
+        // Files added while offline, or before a restart, go up as soon as they can.
+        startUploads();
+        void usage().then((u) => (storage = u));
         const stopOmarchy = startOmarchy();
         const onInstallable = () => (installPrompt = window.__installPrompt ?? null);
         onInstallable();
@@ -70,7 +76,11 @@
     });
 </script>
 
-<main style:--list-width={`${listWidth}px`} class="workspace" class:has-selection={!!page.params.id}>
+<main
+    style:--list-width={`${listWidth}px`}
+    class="workspace"
+    class:has-selection={!!page.params.id || page.route.id === '/capture'}
+>
     <aside class="notes-pane" aria-label="Notes library">
         <NotesList {index}>
             {#snippet settings()}
@@ -114,6 +124,12 @@
                         oninput={(e) => saveWidth(e.currentTarget.value)}
                     />
                 </label>
+                {#if storage}
+                    <p class="small muted menu-note">
+                        Attachments: {sizeText(storage.used)} of {sizeText(storage.quota)} used; files up to
+                        {sizeText(storage.max_file)}.
+                    </p>
+                {/if}
                 {#if installPrompt}
                     <button class="btn" type="button" onclick={() => void install()}>Install as an app</button>
                 {/if}

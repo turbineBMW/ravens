@@ -18,9 +18,11 @@ use yrs::types::xml::{Xml, XmlElementRef, XmlFragment, XmlOut};
 use yrs::{GetString, Map, ReadTxn, Transact};
 
 /// Raise this when `lines` changes: startup then indexes every note again.
-pub const VERSION: i64 = 3;
+pub const VERSION: i64 = 4;
 /// A link to another note (format 5), an inline element with no text of its own.
 const NOTE_LINK: &str = "noteLink";
+/// An attached file or link preview (format 6), a block with no text of its own.
+const ATTACHMENT: &str = "attachment";
 /// The checklist a format 1 note has, and a checklist block's default.
 const FIRST_LIST: &str = "items";
 /// At most this many notes in one search's results.
@@ -40,7 +42,8 @@ pub struct Line {
 
 /// A note's searchable text, in order: its set title, then its body as the
 /// client shows it (notes.ts `textLines`), with checklist items, checked or
-/// not, in their order. Drawings have no text.
+/// not, in their order. Drawings have no text; an attachment is its name, its
+/// alt text, and for a link its title, address and description.
 pub fn lines<T: ReadTxn>(txn: &T) -> Vec<Line> {
     let mut out = Vec::new();
     let meta = txn.get_map("meta");
@@ -112,9 +115,21 @@ fn items<T: ReadTxn>(txn: &T, list: &str, section: &str, out: &mut Vec<Line>) {
     }
 }
 
+/// What an attachment block can be found by.
+fn attachment_lines<T: ReadTxn>(el: &XmlElementRef, txn: &T) -> Vec<String> {
+    ["name", "alt", "title", "url", "description"]
+        .iter()
+        .map(|a| read::string(el.get_attribute(txn, a)))
+        .filter(|t| !t.trim().is_empty())
+        .collect()
+}
+
 /// A block's lines: a block holding text is one line; one holding blocks
 /// (lists, quotes, tables) is theirs.
 fn block_lines<T: ReadTxn>(el: &XmlElementRef, txn: &T) -> Vec<String> {
+    if el.tag().as_ref() == ATTACHMENT {
+        return attachment_lines(el, txn);
+    }
     let holds_text = el.children(txn).any(|c| matches!(c, XmlOut::Text(_)));
     if holds_text {
         return vec![inline(el, txn)];
@@ -187,6 +202,59 @@ pub fn links<T: ReadTxn>(txn: &T) -> Vec<Link> {
     out
 }
 
+/// A note's attachment blocks, in order, each with the section it's under; `note` is left empty.
+pub fn attachments<T: ReadTxn>(txn: &T) -> Vec<crate::blobs::Attachment> {
+    fn within<T: ReadTxn>(
+        el: &XmlElementRef,
+        txn: &T,
+        section: &str,
+        out: &mut Vec<crate::blobs::Attachment>,
+    ) {
+        if el.tag().as_ref() == ATTACHMENT {
+            let attr = |name: &str| read::string(el.get_attribute(txn, name));
+            let blob = attr("blob");
+            if !blob.is_empty() {
+                out.push(crate::blobs::Attachment {
+                    section: section.to_string(),
+                    blob,
+                    kind: attr("kind"),
+                    name: attr("name"),
+                    media_type: attr("type"),
+                    size: attr("size").parse().unwrap_or(0),
+                    thumb: attr("thumb"),
+                    alt: attr("alt"),
+                    url: attr("url"),
+                    ..Default::default()
+                });
+            }
+            return;
+        }
+        for child in el.children(txn) {
+            if let XmlOut::Element(e) = child {
+                within(&e, txn, section, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let Some(body) = txn.get_xml_fragment("body") else {
+        return out;
+    };
+    let mut section = String::new();
+    for child in body.children(txn) {
+        let XmlOut::Element(el) = child else {
+            continue;
+        };
+        if el.tag().as_ref() == "heading" {
+            let id = read::string(el.get_attribute(txn, "section"));
+            if !id.is_empty() {
+                section = id;
+            }
+        }
+        within(&el, txn, &section, &mut out);
+    }
+    out
+}
+
 /// Mirror a changed note; for raven_server's `OnChange`.
 pub fn on_change(key: &DocKey, txn: &yrs::TransactionMut, conn: &Connection) {
     let Some(note) = key.name.strip_prefix("note:") else {
@@ -232,6 +300,7 @@ pub fn index_note<T: ReadTxn>(
     }
     crate::tags::store(&tx, owner, note, &crate::tags::note_tags(&now))?;
     crate::links::store(&tx, owner, note, &links(txn))?;
+    crate::blobs::store_refs(&tx, owner, note, &attachments(txn), crate::blobs::now_ms())?;
     tx.execute(
         "INSERT INTO note_search_state (owner, note_id, version) VALUES (?1, ?2, ?3)
          ON CONFLICT (owner, note_id) DO UPDATE SET version = excluded.version",
@@ -549,6 +618,85 @@ mod tests {
             2,
             "each owner's own"
         );
+    }
+
+    #[test]
+    fn attachments_are_found_by_name_and_mirrored_for_the_browser() {
+        let doc = Doc::new();
+        let body = doc.get_or_insert_xml_fragment("body");
+        let meta = doc.get_or_insert_map("meta");
+        {
+            let mut txn = doc.transact_mut();
+            meta.insert(&mut txn, "format", 6);
+            let attach = |txn: &mut TransactionMut, at: &XmlElementRef, attrs: &[(&str, Any)]| {
+                for (k, v) in attrs {
+                    at.insert_attribute(txn, *k, v.clone());
+                }
+            };
+            let img = block(&mut txn, &body, "attachment", "");
+            attach(
+                &mut txn,
+                &img,
+                &[
+                    ("blob", "b1".into()),
+                    ("kind", "image".into()),
+                    ("name", "turbine.jpg".into()),
+                    ("type", "image/jpeg".into()),
+                    ("size", Any::from(2048.0)),
+                    ("thumb", "t1".into()),
+                    ("alt", "Blade inspection".into()),
+                ],
+            );
+            let h = block(&mut txn, &body, "heading", "Docs");
+            h.insert_attribute(&mut txn, "section", "s-docs");
+            // One inside a list, as a block can be.
+            let ul = block(&mut txn, &body, "bulletList", "");
+            let li = ul.insert(&mut txn, 0, XmlElementPrelim::empty("listItem"));
+            let pdf = li.insert(&mut txn, 0, XmlElementPrelim::empty("attachment"));
+            attach(
+                &mut txn,
+                &pdf,
+                &[
+                    ("blob", "b2".into()),
+                    ("kind", "pdf".into()),
+                    ("name", "manual.pdf".into()),
+                ],
+            );
+            let no_file = block(&mut txn, &body, "attachment", "");
+            attach(&mut txn, &no_file, &[("kind", "image".into())]);
+        }
+        let txn = doc.transact();
+        assert_eq!(
+            lines(&txn),
+            vec![
+                line("", "turbine.jpg"),
+                line("", "Blade inspection"),
+                line("s-docs", "Docs"),
+                line("s-docs", "manual.pdf"),
+            ]
+        );
+        let found = attachments(&txn);
+        assert_eq!(found.len(), 2, "one without a file isn't one");
+        assert_eq!((found[0].size, found[0].thumb.as_str()), (2048, "t1"));
+        assert_eq!(
+            (found[1].section.as_str(), found[1].kind.as_str()),
+            ("s-docs", "pdf")
+        );
+        drop(txn);
+
+        let conn = conn();
+        index(&conn, "me", "trip", &doc);
+        let listed = crate::blobs::list(&conn, "me").unwrap();
+        assert_eq!(
+            listed.iter().map(|a| a.blob.as_str()).collect::<Vec<_>>(),
+            ["b1", "b2"]
+        );
+        assert!(
+            listed.iter().all(|a| a.note == "trip" && !a.stored),
+            "nothing uploaded yet"
+        );
+        let hits = search(&conn, "me", "manual").unwrap();
+        assert_eq!(hits[0].section, "s-docs");
     }
 
     #[test]

@@ -40,6 +40,8 @@
                 return { kind, state: 'open' };
             case 'pinned':
                 return { kind, pinned: true };
+            case 'attachments':
+                return { kind, has: true, of: 'any' };
         }
     }
 
@@ -91,6 +93,7 @@
         ['created', 'Created'],
         ['checklist', 'Checklist'],
         ['pinned', 'Pinned'],
+        ['attachments', 'Attachments'],
     ];
 </script>
 
@@ -156,6 +159,19 @@
                                 <option value="open">has unchecked items</option>
                                 <option value="done">has every item checked</option>
                                 <option value="none">has no items</option>
+                            </select>
+                        {:else if c.kind === 'attachments'}
+                            <select aria-label="Has attachments" bind:value={c.has}>
+                                <option value={true}>has</option>
+                                <option value={false}>has no</option>
+                            </select>
+                            <select aria-label="Kind of attachment" bind:value={c.of}>
+                                <option value="any">attachments</option>
+                                <option value="image">images</option>
+                                <option value="video">videos</option>
+                                <option value="pdf">PDFs</option>
+                                <option value="file">other files</option>
+                                <option value="link">links</option>
                             </select>
                         {:else if c.kind === 'pinned'}
                             <select aria-label="Pinned" bind:value={c.pinned}>

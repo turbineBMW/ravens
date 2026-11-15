@@ -49,6 +49,12 @@
  * attributes { note, section, heading, label }, a note's ID and optionally a
  * section in it (see noteLinks.ts). It has no text of its own: it shows its
  * label, or the note's title as the index has it.
+ *
+ * Format 6 adds attachments: an `attachment` block naming a file by id, with
+ * what's needed to show it before the file arrives (see attachmentNode.svelte.ts).
+ * The file itself is never in the document (files.ts). The index's `picture`
+ * is the note's first image's thumbnail, or the image when it's small, for
+ * the notes list; older clients ignore it.
  */
 import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
@@ -63,13 +69,15 @@ import { readable, type Readable } from 'svelte/store';
 export type NoteKind = 'checklist' | 'text';
 
 /** The newest note format this client can safely edit. */
-export const NOTE_FORMAT = 5;
+export const NOTE_FORMAT = 6;
 /** A note with more than its first checklist. */
 const SEVERAL_LISTS_FORMAT = 3;
 /** A note with a drawing. */
 const INK_FORMAT = 4;
 /** A note with a link to a note. */
 const LINK_FORMAT = 5;
+/** A note with an attachment. */
+const ATTACHMENT_FORMAT = 6;
 
 /** What migrated and new notes are: format 3 is only a note with more than the first list. */
 const BASE_FORMAT = 2;
@@ -101,6 +109,8 @@ export interface NoteMeta {
     done: number;
     /** The note's first drawing, for its thumbnail (see encodeSketch), or null. */
     sketch: Uint8Array | null;
+    /** The file of the note's first image, small, for its thumbnail; '' when none. */
+    picture: string;
 }
 
 export interface Item {
@@ -396,9 +406,21 @@ function blockLines(node: Y.XmlElement, decorate: boolean, link: LinkTextOf): st
             );
         case 'codeBlock':
             return inlineText(node, link).split('\n');
+        case 'attachment':
+            // Not the note's title or preview; in an export, what it was.
+            return decorate ? [attachmentLabel(node)] : [];
         default:
             return [inlineText(node, link)];
     }
+}
+
+/** An attachment in plain text: `[Image: turbine.jpg]`, `[Link: https://…]`. */
+function attachmentLabel(node: Y.XmlElement): string {
+    const attr = (name: string) => String(node.getAttribute(name) ?? '');
+    const kind = attr('kind');
+    if (kind === 'link') return `[Link: ${attr('title') ? `${attr('title')} ` : ''}${attr('url')}]`.replace(' ]', ']');
+    const word = { image: 'Image', video: 'Video', pdf: 'PDF' }[kind] ?? 'File';
+    return `[${word}: ${attr('name') || 'untitled'}]`;
 }
 
 /** Rename a tag inside one run of rich text, each word keeping its formatting. */
@@ -440,10 +462,13 @@ export interface Index {
     entry(id: string): NoteMeta | undefined;
     touch(
         id: string,
-        patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done' | 'sketch'>>,
+        patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done' | 'sketch' | 'picture'>>,
     ): void;
     /** Correct the mirrored fields from the note itself, without counting as an edit. */
-    repair(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'preview' | 'open' | 'done' | 'sketch'>>): void;
+    repair(
+        id: string,
+        patch: Partial<Pick<NoteMeta, 'title' | 'preview' | 'open' | 'done' | 'sketch' | 'picture'>>,
+    ): void;
     remove(id: string): void;
     restore(id: string): void;
     /** Put notes in a folder ('' for the top level). Moving isn't editing: their order stays. */
@@ -492,6 +517,7 @@ function readMeta(id: string, m: YNoteMeta): NoteMeta {
         open: Number(m.get('open') ?? 0),
         done: Number(m.get('done') ?? 0),
         sketch: m.get('sketch') instanceof Uint8Array ? (m.get('sketch') as Uint8Array) : null,
+        picture: String(m.get('picture') ?? ''),
     };
 }
 
@@ -502,6 +528,13 @@ function setSketch(m: YNoteMeta, sketch: Uint8Array | null | undefined) {
     if (sameBytes(now instanceof Uint8Array ? now : null, sketch)) return;
     if (sketch) m.set('sketch', sketch);
     else m.delete('sketch');
+}
+
+/** Write a picture only when it changed; none clears it. */
+function setPicture(m: YNoteMeta, picture: string | undefined) {
+    if (picture === undefined || String(m.get('picture') ?? '') === picture) return;
+    if (picture) m.set('picture', picture);
+    else m.delete('picture');
 }
 
 export function openIndex(): Index {
@@ -596,6 +629,7 @@ export function openIndex(): Index {
                 for (const k of ['title', 'pinned', 'preview', 'open', 'done'] as const) {
                     if (patch[k] !== undefined) m.set(k, patch[k]);
                 }
+                setPicture(m, patch.picture);
                 setSketch(m, patch.sketch);
                 m.set('updated', Date.now());
             });
@@ -609,6 +643,7 @@ export function openIndex(): Index {
                     if (value !== undefined && value !== readMeta(id, m)[k]) m.set(k, value);
                 }
                 setSketch(m, patch.sketch);
+                setPicture(m, patch.picture);
             });
         },
         remove(id) {
@@ -744,6 +779,8 @@ export interface Note extends ChecklistModel {
     newInk(): string;
     /** The note has, or is about to have, a link to a note: raise it to the format that has them. */
     allowLinks(): void;
+    /** The note has, or is about to have, an attachment: raise it to the format that has them. */
+    allowAttachments(): void;
     /** Check off nothing and everything: these two cover every checklist in the note. */
     /**
      * Rename tag `from` (a key) to `to` everywhere in the note, keeping each
@@ -825,6 +862,23 @@ export function openNote(id: string, index?: Index): Note {
         return lines.map((line) => line.trim()).filter(Boolean);
     };
 
+    /** The file to show for the note's first image, anywhere in it (inside a list, say). */
+    const firstPicture = () => {
+        const visit = (node: Y.XmlElement | Y.XmlFragment): string => {
+            for (const child of node.toArray()) {
+                if (!(child instanceof Y.XmlElement)) continue;
+                if (child.nodeName === 'attachment' && child.getAttribute('kind') === 'image') {
+                    const shown = String(child.getAttribute('thumb') || child.getAttribute('blob') || '');
+                    if (shown) return shown;
+                }
+                const inner = visit(child);
+                if (inner) return inner;
+            }
+            return '';
+        };
+        return visit(body);
+    };
+
     /** The note's first drawing with anything in it, for its thumbnail. */
     const firstSketch = () => {
         for (const block of blocks()) {
@@ -851,6 +905,7 @@ export function openNote(id: string, index?: Index): Note {
             open,
             done: all.length - open,
             sketch: meta.has('format') ? firstSketch() : null,
+            picture: meta.has('format') ? firstPicture() : '',
         };
     };
 
@@ -1105,6 +1160,9 @@ export function openNote(id: string, index?: Index): Note {
         },
         allowLinks() {
             if (!isTooNew()) needFormat(LINK_FORMAT);
+        },
+        allowAttachments() {
+            if (!isTooNew()) needFormat(ATTACHMENT_FORMAT);
         },
         renameTag(from, to) {
             if (isTooNew()) return false;

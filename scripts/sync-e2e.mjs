@@ -14,7 +14,11 @@ const until = (check, ms = 5000) =>
     });
 const open = () => {
     const doc = new Y.Doc();
-    const p = new WebsocketProvider(url, room, doc, { params: { v: '5' }, WebSocketPolyfill: globalThis.WebSocket, disableBc: true });
+    const p = new WebsocketProvider(url, room, doc, {
+        params: { v: '6' },
+        WebSocketPolyfill: globalThis.WebSocket,
+        disableBc: true,
+    });
     return { doc, p, synced: until(() => p.synced) };
 };
 

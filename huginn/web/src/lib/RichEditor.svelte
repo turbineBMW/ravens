@@ -27,6 +27,10 @@
     import { Hashtags, type TypedTag } from '$lib/hashtags';
     import { DataDetectors, type DetectedAt } from '$lib/dataDetectors';
     import DetectedMenu from '$lib/DetectedMenu.svelte';
+    import { Attachment, type AttachmentAttrs } from '$lib/attachmentNode.svelte';
+    import AttachmentViewer from '$lib/AttachmentViewer.svelte';
+    import { usage } from '$lib/files';
+    import { fileNodes, previewNode, setMaxFile } from '$lib/newAttachments';
     import Suggest, { type Suggestion } from '$lib/Suggest.svelte';
     import { NoteLink, attrsOf, type TypedLink } from '$lib/noteLinkNode';
     import { linkText, parseNoteUrl, suggestHeadings, suggestNotes, type LinkAttrs } from '$lib/noteLinks';
@@ -40,10 +44,26 @@
 
     let host: HTMLElement;
 
-    /** A link (from a reminder or a search) may name a section to open the note at. */
+    /** A link (from a reminder, a search or the attachments) may name a section or an attachment to open the note at. */
     function revealLinkedSection() {
         const target = decodeURIComponent(location.hash.slice(1));
         if (editor && target.startsWith('section-')) revealSection(editor.view, target.slice('section-'.length));
+        if (editor && target.startsWith('attachment-')) {
+            const blob = target.slice('attachment-'.length);
+            let at = -1;
+            editor.state.doc.descendants((node, pos) => {
+                if (at < 0 && node.type.name === 'attachment' && node.attrs.blob === blob) at = pos;
+                return at < 0;
+            });
+            if (at < 0) return;
+            revealPosition(editor.view, at);
+            editor.commands.setNodeSelection(at);
+            void tick().then(() =>
+                editor?.view.dom
+                    .querySelector(`.note-attachment[data-blob="${CSS.escape(blob)}"]`)
+                    ?.scrollIntoView({ block: 'center' }),
+            );
+        }
     }
     let editor = $state.raw<Editor | null>(null);
 
@@ -165,6 +185,15 @@
         detected = null;
         if (refocus) editor?.commands.focus();
     }
+    /** A card for the page a detected address or link goes to, under the paragraph it's in. */
+    async function previewDetected() {
+        if (!editor || !detected) return;
+        const url = detected.href;
+        const end = editor.state.doc.resolve(detected.to).after(1);
+        detected = null;
+        await addPreview(url, end);
+    }
+
     /** Edit link, from its menu: the link selected, so the Link tool edits it. */
     function editDetected() {
         if (!editor || !detected) return;
@@ -367,6 +396,46 @@
         setTimeout(() => (copied = false), 1500);
     }
 
+    // Attachments: added from the toolbar, the camera, a paste or a drop; shown whole in the viewer.
+    let viewing = $state<AttachmentAttrs | null>(null);
+    let attachInput = $state<HTMLInputElement>();
+    let cameraInput = $state<HTMLInputElement>();
+    let attaching = $state('');
+    /** Keep the files here, queue them for the server, and put them in the note: at `at`, or at the caret. */
+    async function insertFiles(files: File[], at?: number) {
+        if (!editor || !files.length || get(note.tooNew)) return;
+        pasteProblem = '';
+        const { nodes, problem } = await fileNodes(files, (text) => (attaching = text));
+        attaching = '';
+        pasteProblem = problem;
+        if (!nodes.length || !editor) return;
+        note.allowAttachments();
+        if (at !== undefined) editor.chain().focus().insertContentAt(at, nodes).run();
+        else editor.chain().focus().command(pastBlock).insertContent(nodes).command(pastBlock).run();
+    }
+
+    function pickFiles(input: HTMLInputElement) {
+        const files = [...(input.files ?? [])];
+        input.value = '';
+        void insertFiles(files);
+    }
+
+    /** A card for a web page, at `at`. */
+    async function addPreview(url: string, at: number) {
+        if (!editor) return;
+        pasteProblem = '';
+        attaching = 'Getting a preview…';
+        try {
+            const node = await previewNode(url);
+            note.allowAttachments();
+            editor.chain().focus().insertContentAt(Math.min(at, editor.state.doc.content.size), node).run();
+        } catch (err) {
+            pasteProblem = err instanceof Error ? err.message : 'Couldn’t get a preview of that page.';
+        } finally {
+            attaching = '';
+        }
+    }
+
     let pasteProblem = $state('');
     async function pastePlain() {
         pasteProblem = '';
@@ -379,10 +448,11 @@
         }
     }
 
-    /** Step off a selected checklist or drawing, so what's inserted next goes after it, not over it. */
+    /** Step off a selected checklist, drawing or attachment, so what's inserted next goes after it, not over it. */
     function pastBlock({ tr, dispatch }: CommandProps) {
         const { selection } = tr;
-        const atom = selection instanceof NodeSelection && ['checklist', 'ink'].includes(selection.node.type.name);
+        const atom =
+            selection instanceof NodeSelection && ['checklist', 'ink', 'attachment'].includes(selection.node.type.name);
         if (atom && dispatch) {
             tr.setSelection(TextSelection.near(tr.doc.resolve(selection.to), 1));
         }
@@ -544,9 +614,33 @@
                 DataDetectors.configure({
                     onOpen: (found, byKeyboard) => (detected = { ...found, byKeyboard }),
                 }),
+                Attachment.configure({
+                    open: (attrs) => (viewing = attrs),
+                    onAttach: note.allowAttachments,
+                    needsFormat: () => get(note.format) < NOTE_FORMAT,
+                }),
                 FindInNote.configure({ itemsOf: (list) => get(note.list(list).items) }),
                 Collaboration.configure({ fragment: note.body, yUndoOptions: { undoManager: undo } }),
             ],
+            editorProps: {
+                // Files pasted or dropped become attachments; anything else is pasted as usual.
+                handlePaste: (_view, event) => {
+                    const files = [...(event.clipboardData?.files ?? [])];
+                    if (!files.length) return false;
+                    // After the block that's selected, as the toolbar adds them, never over it.
+                    void insertFiles(files);
+                    return true;
+                },
+                handleDrop: (view, event, _slice, moved) => {
+                    const files = [...(event.dataTransfer?.files ?? [])];
+                    if (moved || !files.length) return false;
+                    const at = view.posAtCoords({ left: event.clientX, top: event.clientY });
+                    // At the start of the block it's dropped on, not inside its text.
+                    const pos = at ? view.state.doc.resolve(at.pos) : null;
+                    void insertFiles(files, pos && pos.depth > 0 ? pos.before(1) : at?.pos);
+                    return true;
+                },
+            },
             onTransaction: ({ editor: ed, transaction }) => {
                 revision++;
                 tellBlocks(ed);
@@ -560,6 +654,7 @@
         });
         editor = created;
         revealLinkedSection();
+        void usage().then((u) => u && setMaxFile(u.max_file));
         // Following a link to another section of this note may only change the hash.
         addEventListener('hashchange', revealLinkedSection);
         addEventListener('scroll', follow, true);
@@ -666,6 +761,8 @@
                 .command(pastBlock)
                 .run(),
         )}
+        {@render tool('Attach file', 'Attach', () => attachInput?.click())}
+        {@render tool('Take a photo or video', 'Camera', () => cameraInput?.click())}
         {@render tool('Add table', 'Table', () =>
             chain().command(pastBlock).insertTable({ rows: 2, cols: 2, withHeaderRow: false }).run(),
         )}
@@ -724,6 +821,18 @@
         </div>
     {/if}
 </div>
+<input bind:this={attachInput} type="file" multiple hidden onchange={(e) => pickFiles(e.currentTarget)} />
+<input
+    bind:this={cameraInput}
+    type="file"
+    accept="image/*,video/*"
+    capture="environment"
+    hidden
+    onchange={(e) => pickFiles(e.currentTarget)}
+/>
+{#if attaching}
+    <p class="small muted" role="status">{attaching}</p>
+{/if}
 {#if pasteProblem}
     <p class="small muted" role="alert">{pasteProblem}</p>
 {/if}
@@ -760,7 +869,11 @@
         bottom={detected.bottom}
         onclose={closeDetected}
         onedit={editDetected}
+        onpreview={() => void previewDetected()}
     />
+{/if}
+{#if viewing}
+    <AttachmentViewer attrs={viewing} onclose={() => (viewing = null)} />
 {/if}
 {#if typing && suggestions.length}
     <Suggest
