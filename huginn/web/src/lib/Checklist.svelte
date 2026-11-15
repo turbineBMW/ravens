@@ -6,8 +6,9 @@
      * straight to the note's Yjs document; this component only renders it.
      */
     import { flip } from 'svelte/animate';
-    import { onMount, tick } from 'svelte';
+    import { onMount, tick, untrack } from 'svelte';
     import { createReorder } from '@ravens/ui/reorder';
+    import { findIn } from '$lib/find';
     import { remindMeHref } from '$lib/links';
     import type { ChecklistModel, Item } from '$lib/notes';
 
@@ -16,7 +17,19 @@
         note,
         noteId,
         noteTitle = '',
-    }: { items: Item[]; note: ChecklistModel; noteId: string; noteTitle?: string } = $props();
+        findQuery = '',
+        findCurrent = null,
+        findShown = 0,
+    }: {
+        items: Item[];
+        note: ChecklistModel;
+        noteId: string;
+        noteTitle?: string;
+        /** Find in note: what's looked for, the item with the current match, and when to show it. */
+        findQuery?: string;
+        findCurrent?: string | null;
+        findShown?: number;
+    } = $props();
 
     let listElement: HTMLElement;
 
@@ -49,6 +62,25 @@
             if (showDone) for (const item of done) r.push({ id: item.id, kind: 'item', item });
         }
         return r;
+    });
+
+    // Find in note: the items holding a match are marked, and the current one is
+    // brought into view when asked, the checked items shown if it's among them.
+    const matching = $derived(
+        new Set(findQuery ? items.filter((i) => findIn(i.text, findQuery).length).map((i) => i.id) : []),
+    );
+    let lastShown = untrack(() => findShown);
+    $effect(() => {
+        const shown = findShown;
+        const id = findCurrent;
+        if (shown === lastShown || !id) return;
+        lastShown = shown;
+        untrack(() => {
+            if (!showDone && done.some((i) => i.id === id)) showDone = true;
+        });
+        void tick().then(() =>
+            listElement.querySelector(`[data-item="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'center' }),
+        );
     });
 
     async function focusItem(id: string, atEnd = true) {
@@ -115,6 +147,8 @@
             data-item={row.kind === 'item' ? row.id : undefined}
             data-reorder-row={row.kind === 'item' ? '' : undefined}
             class:done={row.kind === 'item' && row.item.checked}
+            class:found={matching.has(row.id)}
+            class:found-current={row.kind === 'item' && row.id === findCurrent}
             class:add={row.kind === 'add'}
             class:divider={row.kind === 'divider'}
         >

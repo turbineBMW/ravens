@@ -116,13 +116,14 @@ async function device() {
         js,
         errors,
         type: (text) => call('Input.insertText', { text }),
-        /** A key pressed and released, such as Enter (13), Escape (27) or Backspace (8). */
-        key: async (key, keyCode) => {
+        /** A key pressed and released, such as Enter (13), Escape (27) or Backspace (8); `modifiers` 2 is Ctrl, 8 Shift. */
+        key: async (key, keyCode, modifiers = 0) => {
             for (const type of ['rawKeyDown', 'keyUp']) {
                 await call('Input.dispatchKeyEvent', {
                     type,
                     key,
                     code: key,
+                    modifiers,
                     windowsVirtualKeyCode: keyCode,
                     nativeVirtualKeyCode: keyCode,
                 });
@@ -528,6 +529,74 @@ async function main() {
     await page.js(`document.querySelector('.tiptap h2 .section-toggle').click()`);
     await until(page.js, hidden('Under plans'));
 
+    // Find in note: Ctrl+F opens it and every match is counted; going to one in a collapsed
+    // section opens it; checklist items are found, a checked one shown; Escape closes it with the
+    // match selected, leaving nothing highlighted; the menu opens it too, with the selected text.
+    const findField = `document.querySelector('.find-bar input')`;
+    const findCount = `document.querySelector('.find-count')?.textContent`;
+    const findFor = (text) =>
+        page.js(`(() => {
+            const field = ${findField};
+            field.value = ${JSON.stringify(text)};
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+        })()`);
+    const currentLine = `document.querySelector('.tiptap .find-current')?.closest('p')?.textContent`;
+    await focusBody(page);
+    await page.key('f', 70, 2);
+    await until(page.js, `document.activeElement === ${findField}`);
+    await findFor('UNDER');
+    await until(page.js, `${findCount} === '1 of 2' || ${findCount} === '2 of 2'`);
+    assert.equal(await page.js(`document.querySelectorAll('.tiptap .find-match').length`), 2);
+    for (let i = 0; i < 2 && (await page.js(currentLine)) !== 'Under plans'; i++) await page.key('Enter', 13);
+    assert.equal(await page.js(currentLine), 'Under plans');
+    await until(page.js, `${hidden('Under plans')} === false`);
+    const before = await page.js(findCount);
+    await page.key('Enter', 13, 8);
+    await until(page.js, `${findCount} !== ${JSON.stringify(before)} && ${currentLine} === 'Under later'`);
+    await findFor('under zebra');
+    await until(page.js, `${findCount} === 'No matches'`);
+    assert.equal(await page.js(`document.querySelector('.find-bar [aria-label="Next match"]').disabled`), true);
+    // A checked item, with the checked items folded away, is still found and shown.
+    const secondA = `[...document.querySelectorAll('.note-checklist')[1].querySelectorAll('li[data-item]')].find((li) => li.querySelector('.text').value === 'Second A')`;
+    await page.js(`${secondA}.querySelector('input[type=checkbox]').click()`);
+    await until(page.js, `${secondA}?.classList.contains('done')`);
+    await page.js(`document.querySelectorAll('.note-checklist')[1].querySelector('.divider-btn').click()`);
+    await until(page.js, `!${secondA}`);
+    await findFor('second a');
+    await until(page.js, `${findCount} === '1 of 1' && ${secondA}?.classList.contains('found-current')`);
+    await findFor('Second');
+    await until(page.js, `${findCount}?.endsWith(' of 2')`);
+    assert.equal(await page.js(`document.querySelectorAll('.checklist li.found').length`), 2);
+    await page.key('Escape', 27);
+    await until(page.js, `!${findField}`);
+    assert.equal(await page.js(`document.querySelectorAll('.find-match, .checklist li.found').length`), 0);
+    assert.deepEqual(
+        await page.js(`(() => {
+            const field = document.activeElement;
+            return [field.value.startsWith('Second'), field.selectionEnd - field.selectionStart];
+        })()`),
+        [true, 6],
+        'Escape selects the current match',
+    );
+    await page.js(`${secondA}.querySelector('input[type=checkbox]').click()`);
+    await until(page.js, `!${secondA}.classList.contains('done')`);
+    await page.js(`(() => {
+        const ed = document.querySelector('.tiptap').editor;
+        let at = 0;
+        ed.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'Under later') at = pos; });
+        ed.chain().focus().setTextSelection({ from: at, to: at + 7 }).run();
+    })()`);
+    await page.js(`document.querySelector('[aria-label="Note actions"]').click()`);
+    await page.js(
+        `[...document.querySelectorAll('.editor-pane .menu .btn')].find((b) => b.textContent === 'Find in note').click()`,
+    );
+    await until(page.js, `${findField}?.value === 'Under l' && ${findCount} === '1 of 1'`);
+    await page.js(`document.querySelector('.find-bar [aria-label="Close find"]').click()`);
+    await until(page.js, `!${findField} && document.querySelectorAll('.find-match').length === 0`);
+    await until(page.js, `${hidden('Under plans')} === false`);
+    await page.js(`document.querySelector('.tiptap h2 .section-toggle').click()`);
+    await until(page.js, hidden('Under plans'));
+
     // Folders: the notes list is a tree of them. One from the drawer, one inside it from its menu,
     // a new note in that, notes moved in from the note menu and by selecting, folders collapsed and
     // expanded, a folder deleted with everything in it and restored. Opening a note never leaves the tree.
@@ -861,6 +930,18 @@ async function main() {
         await sleep(150);
         assert.equal(await overflows(page), false, `note overflows at ${width}`);
     }
+    // Find in note fits at the narrowest.
+    await page.size(320);
+    await page.js(`dispatchEvent(new CustomEvent('huginn:find'))`);
+    await until(page.js, `!!document.querySelector('.find-bar input')`);
+    await page.js(`(() => {
+        const field = document.querySelector('.find-bar input');
+        field.value = 'First';
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    await until(page.js, `document.querySelector('.find-count')?.textContent === '1 of 1'`);
+    assert.equal(await overflows(page), false, 'find in note overflows at 320');
+    await page.js(`document.querySelector('.find-bar [aria-label="Close find"]').click()`);
 
     // A long list keeps its place through a note and back on a narrow screen.
     await page.size(1280);
@@ -921,7 +1002,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), tags (highlighted, listed, suggested while typed, filtering both ways, rename, delete), Smart Folders (made, in the tree, changed, saved from a filter, deleted), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), tags (highlighted, listed, suggested while typed, filtering both ways, rename, delete), Smart Folders (made, in the tree, changed, saved from a filter, deleted), find in note (Ctrl+F, counting, stepping into a collapsed section, checked items, Escape, the menu, 320), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

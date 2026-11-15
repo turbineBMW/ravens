@@ -952,6 +952,96 @@ otherDevice.destroy();
     assert.ok(!smart().some((f) => f.id === sid));
 }
 
+// Find in note: case and accents don't matter, offsets are the original text's, and
+// matches in the body and in checklist items come in the order they're shown.
+{
+    const { findIn, fold, matchCount } = lib('find');
+    assert.deepEqual(findIn('Café au lait, CAFE noir', 'cafe'), [
+        [0, 4],
+        [14, 18],
+    ]);
+    assert.deepEqual(
+        findIn('aaaa', 'aa'),
+        [
+            [0, 2],
+            [2, 4],
+        ],
+        'matches never overlap',
+    );
+    assert.deepEqual(findIn('Cafe\u0301 time', 'cafe '), [[0, 6]], 'a combining accent stays with its letter');
+    assert.deepEqual(findIn('a.b a+b (x)', '(x)'), [[8, 11]], 'nothing is a pattern');
+    assert.deepEqual(findIn('İstanbul', 'ist'), [[0, 3]]);
+    assert.deepEqual(findIn('two\u00a0words', 'two words'), [[0, 9]], 'a no-break space is a space');
+    assert.deepEqual(findIn('😀 smile', 'smile'), [[3, 8]], 'offsets count UTF-16 units');
+    assert.deepEqual(findIn('anything', ''), []);
+    assert.deepEqual(findIn('', 'x'), []);
+    assert.equal(fold('ÉCOLE').folded, 'ecole');
+    assert.equal(matchCount(0, 0), 'No matches');
+    assert.equal(matchCount(2, 5), '3 of 5');
+
+    const { Schema } = require('@tiptap/pm/model');
+    const { EditorState } = require('@tiptap/pm/state');
+    const { FindInNote, findKey, findState } = lib('findInNote');
+    const schema = new Schema({
+        nodes: {
+            doc: { content: 'block+' },
+            paragraph: { group: 'block', content: 'inline*' },
+            checklist: { group: 'block', atom: true, attrs: { list: { default: 'items' } } },
+            hard_break: { group: 'inline', inline: true },
+            text: { group: 'inline' },
+        },
+        marks: { bold: {} },
+    });
+    const lists = {
+        items: [
+            { id: 'i1', text: 'Buy coffee' },
+            { id: 'i2', text: 'Coffee filters, coffee beans' },
+        ],
+    };
+    const itemsOf = (list) => lists[list] ?? [];
+    const plugins = FindInNote.configure({ itemsOf }).config.addProseMirrorPlugins.call({ options: { itemsOf } });
+    const p = (...content) => schema.node('paragraph', null, content);
+    const doc = schema.node('doc', null, [
+        p(schema.text('Morning '), schema.text('cof', [schema.mark('bold')]), schema.text('fee')),
+        schema.node('checklist', { list: 'items' }),
+        p(schema.text('a'), schema.node('hard_break'), schema.text('café later')),
+    ]);
+    let state = EditorState.create({ doc, plugins });
+    const act = (action) => (state = state.apply(state.tr.setMeta(findKey, action)));
+    act({ query: 'COFFEE' });
+    const shown = () =>
+        findState(state).matches.map((m) =>
+            m.kind === 'text' ? state.doc.textBetween(m.from, m.to) : `${m.item}:${m.at}-${m.end}`,
+        );
+    assert.deepEqual(shown(), ['coffee', 'i1:4-10', 'i2:0-6', 'i2:16-22'], 'across marks, and item by item');
+    assert.equal(findState(state).current, 0);
+    assert.equal(findState(state).decorations.find().length, 1, 'only body text is decorated here');
+    act({ step: -1 });
+    assert.equal(findState(state).current, 3, 'stepping back from the first wraps to the last');
+    act({ step: 1 });
+    assert.equal(findState(state).current, 0);
+    act({ step: 1 });
+    // An item edited elsewhere: reading the lists again keeps the current match.
+    lists.items = [{ id: 'i0', text: 'coffee first' }, ...lists.items];
+    act({ refresh: true });
+    assert.equal(findState(state).matches.length, 5);
+    assert.equal(findState(state).matches[findState(state).current].item, 'i1', 'still on the same item');
+    // Typing before a match keeps it current, and its highlight moves with it.
+    act({ query: 'cafe' });
+    assert.deepEqual(shown(), ['café'], 'after a hard break, accents folded');
+    state = state.apply(state.tr.insertText('Very ', 1));
+    assert.deepEqual(shown(), ['café']);
+    const [deco] = findState(state).decorations.find();
+    assert.equal(state.doc.textBetween(deco.from, deco.to), 'café');
+    // The query starts at the caret: the first match at or after it is current.
+    state = state.apply(state.tr.setSelection(require('@tiptap/pm/state').TextSelection.create(state.doc, 20)));
+    act({ query: 'coffee' });
+    assert.equal(findState(state).current, 1, 'the checklist after the caret');
+    act({ query: '' });
+    assert.equal(findState(state).matches.length, 0);
+    assert.equal(findState(state).current, -1);
+}
+
 // A note from a newer client can't be changed by this one, in any way.
 const newer = open('fixtureuntitled0003');
 load(newer.doc.doc, fixture.notes[GROCERIES]);
@@ -979,7 +1069,7 @@ assert.equal(newer.renameTag('anything', 'else'), false);
 assert.equal(stateOf(newer.doc.doc), frozenNote, 'no edit reaches a newer note');
 assert.equal(stateOf(fixtureIndex.doc.doc), frozenIndex, 'nor its index entry');
 console.log(
-    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), plain text, newer-format guard, late store subscribers',
+    'PASS: trash/restore, concurrent offline edit, stable item IDs, persistence roundtrip, deterministic ordering, legacy metadata, format 1 fixtures, index repair, seed bytes, migration guards, title rule, several checklists, drawings, highlighter and partial erase, lasso and ruler geometry, move/resize, paper, sketches for thumbnails, folders (tree, loops, move, delete and restore, crossing changes), tags (the rule, renaming in text, lists and titles, suggestions while typing), Smart Folders (conditions, matching, following tags), find in note (folding, offsets, order, keeping its place), plain text, newer-format guard, late store subscribers',
 );
 for (const held of docs.values()) held.doc.destroy();
 deviceA.destroy();

@@ -1,6 +1,6 @@
 <script lang="ts">
     // Symbolic header bar icons, drawn in the current text colour.
-    let { name }: { name: 'add' | 'menu' | 'more' | 'back' | 'chevron' | 'smart' } = $props();
+    let { name }: { name: 'add' | 'menu' | 'more' | 'back' | 'chevron' | 'smart' | 'up' | 'down' | 'close' } = $props();
 </script>
 
 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -12,6 +12,12 @@
         <path d="M10 3 5 8l5 5" />
     {:else if name === 'chevron'}
         <path d="m6 3 5 5-5 5" />
+    {:else if name === 'up'}
+        <path d="m3 10 5-5 5 5" />
+    {:else if name === 'down'}
+        <path d="m3 6 5 5 5-5" />
+    {:else if name === 'close'}
+        <path d="m4 4 8 8M12 4l-8 8" />
     {:else if name === 'smart'}
         <path d="M2.5 3.5h11L9.25 8.5v4L6.75 14V8.5z" />
     {:else}

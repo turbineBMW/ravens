@@ -29,6 +29,24 @@ export function revealSection(view: import('@tiptap/pm/view').EditorView, sectio
     view.dom.querySelector(`[data-section="${CSS.escape(section)}"]`)?.scrollIntoView({ block: 'start' });
 }
 
+/** Expand every collapsed section that hides a position, a section inside another included. */
+export function revealPosition(view: import('@tiptap/pm/view').EditorView, pos: number) {
+    const hidden = collapse.getState(view.state);
+    if (!hidden?.size) return;
+    // The headings a top-level node is under: each runs to the next heading at its level or above.
+    const under: { level: number; section: string }[] = [];
+    let hiding: string[] = [];
+    view.state.doc.forEach((node, offset) => {
+        const level = node.type.name === 'heading' ? Number(node.attrs.level) : null;
+        if (level !== null) while (under.length && under[under.length - 1].level >= level) under.pop();
+        if (offset <= pos && pos < offset + node.nodeSize) {
+            hiding = under.filter((h) => hidden.has(h.section)).map((h) => h.section);
+        }
+        if (level !== null && node.attrs.section) under.push({ level, section: node.attrs.section });
+    });
+    for (const section of hiding) view.dispatch(view.state.tr.setMeta(collapse, section));
+}
+
 function load(key: string): Set<string> {
     try {
         return new Set(JSON.parse(localStorage.getItem(key) ?? '[]'));
