@@ -116,6 +116,18 @@ async function device() {
         js,
         errors,
         type: (text) => call('Input.insertText', { text }),
+        /** A key pressed and released, such as Enter (13), Escape (27) or Backspace (8). */
+        key: async (key, keyCode) => {
+            for (const type of ['rawKeyDown', 'keyUp']) {
+                await call('Input.dispatchKeyEvent', {
+                    type,
+                    key,
+                    code: key,
+                    windowsVirtualKeyCode: keyCode,
+                    nativeVirtualKeyCode: keyCode,
+                });
+            }
+        },
         drag: async (from, to) => {
             const mouse = (type, [x, y], buttons) =>
                 call('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons, clickCount: 1 });
@@ -624,6 +636,77 @@ async function main() {
     await page.go(noteUrl);
     await until(page.js, `!!document.querySelector('.tiptap')`);
 
+    // Tags: written in the text, shown as tags, listed in the drawer, filtering the list from a
+    // click, the other way round too, and renamed and deleted in the notes written with them.
+    await page.js(
+        `document.querySelector('.tiptap').editor.chain().focus('end').insertContent('<p>Shopping #errands for #Home</p>').run()`,
+    );
+    await until(
+        page.js,
+        `[...document.querySelectorAll('.tiptap .hashtag')].map((t) => t.dataset.tag).join() === 'errands,Home'`,
+    );
+    const drawerTags = `[...document.querySelectorAll('.tag-list .btn')].map((b) => b.textContent.replace(/\\s+/g, ' ').trim()).join()`;
+    await until(page.js, `${drawerTags} === '#errands 1,#Home 1'`, 20_000);
+    // A real click: ProseMirror handles clicks from the mouse going down and up.
+    const tagAt = await page.js(`(() => {
+        const tag = document.querySelector('.tiptap .hashtag[data-tag="errands"]');
+        tag.scrollIntoView({ block: 'center' });
+        const r = tag.getBoundingClientRect();
+        return [r.x + r.width / 2, r.y + r.height / 2];
+    })()`);
+    await page.stroke([tagAt]);
+    const chips = `[...document.querySelectorAll('.tag-chip summary')].map((c) => c.textContent).join()`;
+    await until(page.js, `${chips} === '#errands' && ${rowTitles}.join() === 'Groceries'`);
+    await page.js(`document.querySelector('.tag-chip summary').click()`);
+    await press('.tag-chip[open] .btn', 'Show notes without it');
+    await until(
+        page.js,
+        `${chips} === 'not #errands' && document.querySelector('.library-empty')?.textContent.includes('No notes with these tags')`,
+    );
+    await page.js(`document.querySelector('.tag-chip summary').click()`);
+    await press('.tag-chip[open] .btn', 'Show notes with it');
+    await page.js(`document.querySelector('.tag-chip summary').click()`);
+    await press('.tag-chip[open] .btn', 'Rename tag');
+    await nameFolder('.tag-chip[open]', 'Chores');
+    await until(page.js, `document.querySelector('.tiptap').textContent.includes('Shopping #Chores for #Home')`);
+    await until(page.js, `${chips} === '#Chores' && ${rowTitles}.join() === 'Groceries'`, 20_000);
+    await mainMenu();
+    await press('.tag-list .btn', '#Home');
+    await until(page.js, `${chips} === '#Chores,#Home'`);
+    await page.js(`document.querySelectorAll('.tag-chip summary')[1].click()`);
+    await press('.tag-chip[open] .btn', 'Delete tag');
+    await press('.tag-chip[open] .btn.danger', 'Delete tag');
+    await until(page.js, `document.querySelector('.tiptap').textContent.includes('Shopping #Chores for Home')`);
+    await press('.tag-filter .btn', 'Clear');
+    // Typing a tag suggests the tags already used, narrowing as it goes; Enter picks one, Escape
+    // puts the suggestions away, and they don't show for a tag nobody has used.
+    const suggested = `[...document.querySelectorAll('.tag-suggest [role=option]')].map((o) => o.textContent.replace(/\\s+/g, ' ').trim()).join()`;
+    // The caret at the end of the line, put there as a person would: the list's buttons had the selection.
+    const lineEnd = await page.js(`(() => {
+        const line = [...document.querySelectorAll('.tiptap p')].find((p) => p.textContent.startsWith('Shopping'));
+        line.scrollIntoView({ block: 'center' });
+        const r = line.getBoundingClientRect();
+        return [r.right - 4, r.y + r.height / 2];
+    })()`);
+    await page.stroke([lineEnd]);
+    await page.type(' #ch');
+    await until(page.js, `${suggested} === '#Chores 1'`);
+    await page.key('Enter', 13);
+    await until(
+        page.js,
+        `document.querySelector('.tiptap').textContent.endsWith('for Home #Chores ') && !document.querySelector('.tag-suggest')`,
+    );
+    await page.type('#');
+    await until(page.js, `${suggested} === '#Chores 1'`);
+    await page.key('Escape', 27);
+    await until(page.js, `!document.querySelector('.tag-suggest')`);
+    await page.type('zq');
+    await sleep(200);
+    assert.equal(await page.js(`!!document.querySelector('.tag-suggest')`), false, 'nothing to suggest');
+    for (let i = 0; i < 3; i++) await page.key('Backspace', 8);
+    await until(page.js, `document.querySelector('.tiptap').textContent.endsWith('for Home #Chores ')`);
+    await until(page.js, `!document.querySelector('.tag-filter') && ${drawerTags} === '#Chores 1'`, 20_000);
+
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -650,6 +733,7 @@ async function main() {
     await until(other.js, `document.querySelector('.ink-frame').classList.contains('paper-lines')`);
     await until(other.js, `document.querySelectorAll('.note-row.selected svg.sketch path').length === 4`);
     await until(other.js, `document.querySelectorAll('.folder-node').length === 2`); // Folders sync.
+    await until(other.js, `document.querySelector('.tiptap .hashtag')?.dataset.tag === 'Chores'`); // And renamed tags.
     assert.deepEqual(
         await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
         sectionIds,
@@ -786,7 +870,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), tags (highlighted, listed, suggested while typed, filtering both ways, rename, delete), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

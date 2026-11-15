@@ -47,6 +47,7 @@ import { generateKeyBetween } from 'fractional-indexing';
 import { base } from '$app/paths';
 import { openDoc, yStore, newId, type OpenDoc } from '@ravens/ui/sync';
 import { within, type Folder } from '$lib/folders';
+import { retag, tagKey, tagMatches } from '$lib/tags';
 import { readable, type Readable } from 'svelte/store';
 
 export type NoteKind = 'checklist' | 'text';
@@ -65,6 +66,8 @@ const FIRST_LIST = 'items';
 
 /** Marks the migration, so undo and the index don't treat it as an edit. */
 const MIGRATION = 'huginn-migration';
+/** Marks renaming a tag across notes, so it isn't on any editor's undo stack. */
+const TAG_RENAME = 'huginn-tag-rename';
 const INDEX_DELAY_MS = 300;
 
 export interface NoteMeta {
@@ -371,6 +374,32 @@ function blockLines(node: Y.XmlElement, decorate: boolean): string[] {
     }
 }
 
+/** Rename a tag inside one run of rich text, each word keeping its formatting. */
+function retagText(text: Y.XmlText, from: string, to: string): boolean {
+    const ops = text.toDelta() as { insert: unknown; attributes?: Record<string, unknown> }[];
+    // Embedded objects take one place each, as Yjs counts them.
+    const plain = ops.map((op) => (typeof op.insert === 'string' ? op.insert : '\uFFFC')).join('');
+    const formatAt = (at: number) => {
+        let start = 0;
+        for (const op of ops) {
+            const length = typeof op.insert === 'string' ? op.insert.length : 1;
+            if (at < start + length) return op.attributes ?? {};
+            start += length;
+        }
+        return {};
+    };
+    const matches = tagMatches(plain).filter((m) => tagKey(m.name) === from);
+    for (const m of matches.reverse()) {
+        if (to) {
+            // Inserted text takes on the formatting before it (the '#') unless told otherwise.
+            const carried = Object.fromEntries(Object.keys(formatAt(m.at)).map((k) => [k, null]));
+            text.delete(m.at + 1, m.name.length);
+            text.insert(m.at + 1, to, { ...carried, ...formatAt(m.at + 1) });
+        } else text.delete(m.at, 1);
+    }
+    return matches.length > 0;
+}
+
 // ---------- the index ----------
 
 export interface Index {
@@ -631,6 +660,12 @@ export interface Note extends ChecklistModel {
     /** Prepare a new drawing for a block to point at; returns its name. */
     newInk(): string;
     /** Check off nothing and everything: these two cover every checklist in the note. */
+    /**
+     * Rename tag `from` (a key) to `to` everywhere in the note, keeping each
+     * word's formatting; with `to` empty, the tag becomes a plain word. Whether
+     * anything changed.
+     */
+    renameTag(from: string, to: string): boolean;
     uncheckEverything(): void;
     removeAllChecked(): void;
     /** Bring this note's entry in the index back in line with its contents. */
@@ -739,7 +774,7 @@ export function openNote(id: string, index?: Index): Note {
         pendingTouch = null;
     };
     const onBody = (_events: unknown, txn: Y.Transaction) => {
-        if (!txn.local || txn.origin === MIGRATION) return;
+        if (!txn.local || txn.origin === MIGRATION || txn.origin === TAG_RENAME) return;
         if (pendingTouch) clearTimeout(pendingTouch);
         pendingTouch = setTimeout(flushTouch, INDEX_DELAY_MS);
     };
@@ -975,6 +1010,35 @@ export function openNote(id: string, index?: Index): Note {
         newInk() {
             if (!isTooNew()) needFormat(INK_FORMAT);
             return `strokes:${newId()}`;
+        },
+        renameTag(from, to) {
+            if (isTooNew()) return false;
+            let changed = false;
+            doc.doc.transact(() => {
+                const title = String(meta.get('title') ?? '');
+                if (retag(title, from, to) !== title) {
+                    meta.set('title', retag(title, from, to));
+                    changed = true;
+                }
+                for (const map of shownLists()) {
+                    map.forEach((item) => {
+                        const text = String(item.get('text') ?? '');
+                        if (retag(text, from, to) === text) return;
+                        item.set('text', retag(text, from, to));
+                        changed = true;
+                    });
+                }
+                const visit = (node: Y.XmlElement | Y.XmlFragment) => {
+                    for (const child of node.toArray()) {
+                        if (child instanceof Y.XmlText) changed = retagText(child, from, to) || changed;
+                        else if (child instanceof Y.XmlElement) visit(child);
+                    }
+                };
+                visit(body);
+            }, TAG_RENAME);
+            // Not an edit to the note: its place in the list stays.
+            if (changed && index) index.repair(id, summary());
+            return changed;
         },
         uncheckEverything() {
             for (const name of shownNames()) list(name).uncheckAll();

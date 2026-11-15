@@ -851,6 +851,80 @@ main.workspace {
         transition: none;
     }
 }
+/* Tags: highlighted in notes, listed in the drawer, and chips for the list's filter. */
+.tiptap .hashtag {
+    color: var(--accent);
+    cursor: pointer;
+}
+/* The tags already used, under one being typed. */
+.tag-suggest {
+    position: fixed;
+    z-index: 50;
+    display: grid;
+    width: 240px;
+    max-height: 50dvh;
+    overflow: auto;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel);
+    box-shadow: var(--shadow);
+}
+.tag-suggest button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-height: 40px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: calc(var(--radius) - 2px);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.tag-suggest button:hover,
+.tag-suggest button[aria-selected='true'] {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.tag-list {
+    display: grid;
+    gap: 2px;
+}
+.tag-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 0 0 8px;
+}
+.tag-chip .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--text);
+    font-size: 0.9rem;
+}
+.tag-chip .chip.excluded {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+/* Chips start at the list's left edge, so their menus open rightwards, over the rows. */
+.tag-chip .sheet {
+    left: 0;
+    right: auto;
+    z-index: 10;
+    width: 264px;
+}
+.clear-filter {
+    min-height: 32px;
+    border-color: transparent;
+    background: transparent;
+}
 /* Folders: forms for naming one, and choosing where things go. */
 .folder-name {
     overflow: hidden;
