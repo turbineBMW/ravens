@@ -4,7 +4,7 @@ Reviewed November 1, 2026 against repository revision `3c8c53e` plus the current
 
 ## Current status
 
-As of November 14, 2026, at `5ded6e8`:
+As of November 14, 2026, at `52b12eb`:
 
 | Phase | State |
 | --- | --- |
@@ -12,7 +12,7 @@ As of November 14, 2026, at `5ded6e8`:
 | P1 Workspace | Done. Hardware acceptance on the Surface and Fold is still open. |
 | P2 Rich notes | Code complete (PRs #8–#10, format 3). Hardware acceptance is still open: touch selection, soft keyboard and IME on the Surface and Fold. |
 | P5 Ink | **Done except hardware and exports**, brought ahead of P3 and P4. Drawing (PR #12, format 4), the widths, highlighter and partial eraser (PR #13), the lasso, move/resize, ruler and paper (PR #14), and thumbnails in the notes list (PR #15) passed on the Surface; the Fold is untested. Ink in exports waits for P4. See [Phase 5](#phase-5--editable-ink-for-surface-and-fold). |
-| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface; folders are next. See [Phase 3](#phase-3--organization-and-finding-things). |
+| P3 Organization | **In progress.** Full-text search (PR #16) passed on the Surface. Folders, with the notes list as a collapsible tree (PR #17), passed on the Surface. See [Phase 3](#phase-3--organization-and-finding-things). |
 | P4, P6–P9 | Not started. |
 
 The increment notes below are a history of what each step shipped; this table is the summary.
@@ -264,7 +264,13 @@ Measured with `cargo test -p huginn-server --release -- --ignored --nocapture` (
 
 **Surface Pro 11, November 14, 2026, deployed to the mini:** passed. Startup indexed the mini's 3 existing notes.
 
-Still to do in this phase: folders, tags and Smart Folders, find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
+**Second increment, PR #17:** folders and subfolders, kept in the index document: a `folders` map of id to { name, parent, created, deletedAt, deletedWith }, and a `folder` on each note's entry ('' for the top level). Clients that predate it ignore both and show every note in one list, so there's no new format. How folders show is worked out the same way on every device (`folders.ts`): a folder whose parent is gone sits at the top level, a note whose folder is gone shows at the top level (so a note moved into a folder another device deleted offline is never lost), and two devices moving folders into each other offline are separated by moving the one with the lowest id to the top level. The notes list is the folder tree, always from the top: each folder is a row that collapses or expands when clicked, with the number of notes in it and the folders inside it, followed when expanded by its subfolders and then its notes, indented; notes in no folder follow at the top level. Opening a note only highlights it in the tree: the list never narrows to a folder, so nothing needs navigating back to. The open note's folders are expanded and its row scrolled into view, including when it was opened from a search or a link. Collapsed folders are kept per device, like collapsed sections. Each folder row has a menu: *New note here*, rename, a folder inside it, move it (never into itself or a folder inside it), and delete it after saying how many folders and notes go with it. The main menu has *New folder…* for one at the top level; the header's *New note* makes one at the top level. Deleting moves the folder, the folders in it and their notes to Recently Deleted, each marked `deletedWith` that folder; Recently Deleted lists the folder with *Restore*, which brings back everything that deletion took. A note restored on its own goes back to its folder if that's live, and to the top level otherwise. The note menu has *Move to folder…*, and *Select* moves or deletes several notes at once. Search results and Recently Deleted are flat lists, search results showing each note's folder.
+
+A first version had a folder view (`?folder=<id>`) that the list narrowed to, with the folders in the main menu; on the Surface, narrowing the list meant navigating back to see the rest, so the list became the whole tree instead.
+
+**Surface Pro 11, November 14, 2026, deployed to the mini:** passed.
+
+Still to do in this phase: tags and Smart Folders, find-in-note, list options (gallery, date grouping, sort), note links, and detecting emails, URLs and phone numbers.
 
 ### Phase 4 — Attachments, capture, and portability
 

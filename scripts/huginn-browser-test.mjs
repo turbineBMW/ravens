@@ -516,6 +516,114 @@ async function main() {
     await page.js(`document.querySelector('.tiptap h2 .section-toggle').click()`);
     await until(page.js, hidden('Under plans'));
 
+    // Folders: the notes list is a tree of them. One from the drawer, one inside it from its menu,
+    // a new note in that, notes moved in from the note menu and by selecting, folders collapsed and
+    // expanded, a folder deleted with everything in it and restored. Opening a note never leaves the tree.
+    const press = (selector, text) =>
+        page.js(`(() => {
+            const all = [...document.querySelectorAll(${JSON.stringify(selector)})];
+            const found = all.find((b) => b.textContent.trim().startsWith(${JSON.stringify(text)}));
+            if (!found) throw Error('no ' + ${JSON.stringify(text)} + ' in ' + all.map((b) => b.textContent.trim()).join(', '));
+            found.click();
+        })()`);
+    const nameFolder = (scope, name) =>
+        page.js(`(() => {
+            const form = document.querySelector('${scope} .folder-form');
+            const input = form.querySelector('input');
+            input.value = ${JSON.stringify(name)};
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            return new Promise((done) => setTimeout(() => done(form.requestSubmit()), 50));
+        })()`);
+    const rowTitles = `[...document.querySelectorAll('.note-rows .note-row strong')].map((r) => r.textContent)`;
+    const selectedTitle = `document.querySelector('.note-row.selected strong')?.textContent`;
+    const folderNodes = `[...document.querySelectorAll('.folder-node .folder-name')].map((f) => f.textContent).join()`;
+    const depths = `[...document.querySelectorAll('.note-rows .note-row')].map((r) => r.dataset.depth).join()`;
+    const mainMenu = () => page.js(`document.querySelector('[aria-label="Main menu"]').click()`);
+    const folderMenu = (name) => page.js(`document.querySelector('[aria-label="Actions for ${name}"]').click()`);
+    const notePath = new URL(noteUrl).pathname;
+    await mainMenu();
+    await press('.primary-menu .btn', 'New folder');
+    await nameFolder('.primary-menu', 'Work');
+    await until(page.js, `${folderNodes} === 'Work'`);
+    assert.equal(await page.js('location.pathname + location.search'), notePath, 'the open note stays open');
+    await folderMenu('Work');
+    await press('.folder-menu[open] .btn', 'New folder inside');
+    await nameFolder('.folder-menu[open]', 'Turbines');
+    await until(page.js, `${folderNodes} === 'Work,Turbines'`);
+    await folderMenu('Turbines');
+    await press('.folder-menu[open] .btn', 'New note here');
+    await until(
+        page.js,
+        `location.pathname !== ${JSON.stringify(notePath)} && !!document.querySelector('.headerbar-input')`,
+    );
+    await until(page.js, `document.querySelector('.note-row.selected')?.dataset.depth === '2'`); // In Work › Turbines.
+    assert.deepEqual(await page.js(`${rowTitles}.sort()`), ['Groceries', 'New note'], 'the whole tree stays in view');
+    // Clicking a note opens it, highlighted where it is; the list doesn't change.
+    await page.js(
+        `[...document.querySelectorAll('.note-rows .note-row a')].find((a) => a.querySelector('strong').textContent === 'Groceries').click()`,
+    );
+    await until(page.js, `location.pathname === ${JSON.stringify(notePath)} && ${selectedTitle} === 'Groceries'`);
+    assert.equal(await page.js('location.search'), '');
+    assert.equal(await page.js(folderNodes), 'Work,Turbines');
+    // The open note moves in from its menu.
+    await page.js(`document.querySelector('[aria-label="Note actions"]').click()`);
+    await press('.editor-pane .menu .btn', 'Move to folder');
+    await press('.editor-pane .folder-picker .btn', 'Turbines');
+    await until(page.js, `${depths} === '2,2'`); // Both in Work › Turbines.
+    // Selecting both and moving them to Work.
+    await press('.library-search .btn', 'Select');
+    await page.js(`document.querySelectorAll('.note-select input').forEach((box) => box.click())`);
+    await until(page.js, `document.querySelector('.selection-bar span')?.textContent === '2 selected'`);
+    await press('.selection-bar .btn', 'Move');
+    await press('.selection-bar .folder-picker .btn', 'Work');
+    await until(page.js, `!document.querySelector('.selection-bar')`);
+    await until(page.js, `${depths} === '1,1'`); // Both in Work, under Turbines.
+    // Collapsing Work hides what's in it, on this device, until it's expanded.
+    await page.js(`document.querySelector('.folder-label[title="Collapse Work"]').click()`);
+    await until(page.js, `${rowTitles}.length === 0 && ${folderNodes} === 'Work'`);
+    await page.go(BASE);
+    await until(page.js, `${folderNodes} === 'Work' && ${rowTitles}.length === 0`); // Remembered.
+    // Opening a note inside a collapsed folder expands it, so the note is in view.
+    await page.go(noteUrl);
+    await until(page.js, `document.querySelector('.note-row.selected')?.dataset.depth === '1'`);
+    assert.equal(await page.js(folderNodes), 'Work,Turbines');
+    // Deleting Work takes Turbines and both notes to Recently Deleted; restoring brings them back.
+    await folderMenu('Work');
+    await press('.folder-menu[open] .btn', 'Delete folder');
+    await until(
+        page.js,
+        `document.querySelector('.folder-menu[open] p')?.textContent.replace(/\\s+/g, ' ').includes('1 folder in it and 2 notes')`,
+    );
+    await press('.folder-menu[open] .btn.danger', 'Delete folder');
+    await until(page.js, `${rowTitles}.length === 0 && ${folderNodes} === '' && !location.pathname.includes('/n/')`);
+    await mainMenu();
+    await press('.primary-menu .btn', 'Recently Deleted');
+    await until(page.js, `document.querySelector('.folder-row strong')?.textContent === 'Work'`);
+    assert.equal(await page.js(`${rowTitles}.length`), 2, 'its notes wait with it');
+    await press('.folder-row .btn', 'Restore');
+    await until(page.js, `!document.querySelector('.folder-row') && ${rowTitles}.length === 0`);
+    await mainMenu();
+    await press('.primary-menu .btn', 'All Notes');
+    await until(page.js, `${rowTitles}.length === 2 && ${folderNodes} === 'Work,Turbines'`);
+    // Put Groceries back at the top level and delete the extra note, for the checks below.
+    await press('.library-search .btn', 'Select');
+    await page.js(`(() => {
+        const rows = [...document.querySelectorAll('.note-select')];
+        rows.find((r) => r.querySelector('strong').textContent !== 'New note').querySelector('input').click();
+    })()`);
+    await press('.selection-bar .btn', 'Move');
+    await press('.selection-bar .folder-picker .btn', 'No folder');
+    await until(page.js, `!document.querySelector('.selection-bar')`);
+    await press('.library-search .btn', 'Select');
+    await page.js(`(() => {
+        const rows = [...document.querySelectorAll('.note-select')];
+        rows.find((r) => r.querySelector('strong').textContent === 'New note').querySelector('input').click();
+    })()`);
+    await press('.selection-bar .btn', 'Delete');
+    await until(page.js, `${rowTitles}.length === 1`);
+    await page.go(noteUrl);
+    await until(page.js, `!!document.querySelector('.tiptap')`);
+
     await until(page.js, subtitleIs('Saved'));
     stopServer();
     await until(page.js, `${subtitle}?.startsWith('Offline') || ${subtitle} === 'Connecting…'`);
@@ -541,6 +649,7 @@ async function main() {
     await until(other.js, `document.querySelector('.note-ink canvas')?.dataset.strokes === '4'`);
     await until(other.js, `document.querySelector('.ink-frame').classList.contains('paper-lines')`);
     await until(other.js, `document.querySelectorAll('.note-row.selected svg.sketch path').length === 4`);
+    await until(other.js, `document.querySelectorAll('.folder-node').length === 2`); // Folders sync.
     assert.deepEqual(
         await other.js(`[...document.querySelectorAll('.tiptap h2')].map((h) => h.dataset.section)`),
         sectionIds,
@@ -677,7 +786,7 @@ async function main() {
 
     assert.deepEqual([...pageErrors.values()].flat(), [], 'no uncaught errors');
     console.log(
-        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
+        'PASS: rich text and undo, title rule, several checklists, sections and reminders, drawings with pen, mouse, highlighter, both erasers, lasso move/delete/undo, paper and ruler, list thumbnails, full-text search (sections, offline, unopened notes), folders (the list as a collapsible tree, nesting, new notes in them, moving one or several, delete and restore), format 1 note on two devices, save states through an outage, offline open, second device, resize keeps focus, 320/390/640 without overflow, list position, Back/Forward/deep link, outdated client',
     );
 }
 

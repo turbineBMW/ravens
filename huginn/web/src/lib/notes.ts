@@ -3,10 +3,16 @@
  *
  * `index`: one document per user listing their notes: a Y.Map of note id to
  * a Y.Map { title, kind, created, updated, pinned, preview, open, done,
- * sketch }. Titles are mirrored here so the notes page renders offline without
- * opening every note. `sketch`, when there is one, is a small copy of the
- * note's first drawing for its thumbnail (see encodeSketch); clients that
- * predate it ignore it.
+ * sketch, folder, deletedAt, deletedWith }. Titles are mirrored here so the
+ * notes page renders offline without opening every note. `sketch`, when there
+ * is one, is a small copy of the note's first drawing for its thumbnail (see
+ * encodeSketch). `folders` is a Y.Map of folder id to Y.Map { name, parent,
+ * created, deletedAt, deletedWith }; a note's `folder` and a folder's `parent`
+ * name a folder, or '' for the top level. Deleting a folder moves it, the
+ * folders in it and their notes to Recently Deleted, each marked `deletedWith`
+ * that folder, so restoring it brings them all back. How folders are shown
+ * when changes cross (a deleted parent, a loop) is in folders.ts. Clients that
+ * predate sketches or folders ignore them and show every note in one list.
  *
  * `note:<id>`: one document per note. `meta` holds { title }; `items` is a
  * Y.Map of item id to Y.Map { text, checked, checkedAt, pos }. Each item is
@@ -40,6 +46,7 @@ import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
 import { base } from '$app/paths';
 import { openDoc, yStore, newId, type OpenDoc } from '@ravens/ui/sync';
+import { within, type Folder } from '$lib/folders';
 import { readable, type Readable } from 'svelte/store';
 
 export type NoteKind = 'checklist' | 'text';
@@ -69,6 +76,10 @@ export interface NoteMeta {
     pinned: boolean;
     /** Zero for active notes; otherwise retained in Recently Deleted until restored. */
     deletedAt: number;
+    /** The folder whose deletion took this note with it, if that's how it was deleted. */
+    deletedWith: string;
+    /** The folder it's in; '' at the top level. See folders.ts for where it shows. */
+    folder: string;
     /** The first open items, one per line, for the card on the notes page. */
     preview: string;
     open: number;
@@ -86,6 +97,7 @@ export interface Item {
 }
 
 type YNoteMeta = Y.Map<string | number | boolean | Uint8Array>;
+type YFolder = Y.Map<string | number>;
 type YItem = Y.Map<string | number | boolean>;
 type YStroke = Y.Map<string | number | Uint8Array>;
 
@@ -364,7 +376,9 @@ function blockLines(node: Y.XmlElement, decorate: boolean): string[] {
 export interface Index {
     doc: OpenDoc;
     notes: Readable<NoteMeta[]>;
-    create(kind: NoteKind): string;
+    /** Every folder, Recently Deleted ones included. */
+    folders: Readable<Folder[]>;
+    create(kind: NoteKind, folder?: string): string;
     kindOf(id: string): NoteKind | undefined;
     touch(
         id: string,
@@ -374,7 +388,28 @@ export interface Index {
     repair(id: string, patch: Partial<Pick<NoteMeta, 'title' | 'preview' | 'open' | 'done' | 'sketch'>>): void;
     remove(id: string): void;
     restore(id: string): void;
+    /** Put notes in a folder ('' for the top level). Moving isn't editing: their order stays. */
+    moveNotes(ids: string[], folder: string): void;
+    createFolder(name: string, parent: string): string;
+    renameFolder(id: string, name: string): void;
+    /** Move a folder into another ('' for the top level); never into itself or a folder inside it. */
+    moveFolder(id: string, parent: string): void;
+    /** Move a folder, the folders in it and all their notes to Recently Deleted. */
+    deleteFolder(id: string): void;
+    /** Bring back a deleted folder with everything its deletion took. */
+    restoreFolder(id: string): void;
     release(): void;
+}
+
+function readFolder(id: string, m: YFolder): Folder {
+    return {
+        id,
+        name: String(m.get('name') ?? ''),
+        parent: String(m.get('parent') ?? ''),
+        created: Number(m.get('created') ?? 0),
+        deletedAt: Number(m.get('deletedAt') ?? 0),
+        deletedWith: String(m.get('deletedWith') ?? ''),
+    };
 }
 
 function readMeta(id: string, m: YNoteMeta): NoteMeta {
@@ -386,6 +421,8 @@ function readMeta(id: string, m: YNoteMeta): NoteMeta {
         updated: Number(m.get('updated') ?? 0),
         pinned: Boolean(m.get('pinned') ?? false),
         deletedAt: Number(m.get('deletedAt') ?? 0),
+        deletedWith: String(m.get('deletedWith') ?? ''),
+        folder: String(m.get('folder') ?? ''),
         preview: String(m.get('preview') ?? ''),
         open: Number(m.get('open') ?? 0),
         done: Number(m.get('done') ?? 0),
@@ -411,10 +448,17 @@ export function openIndex(): Index {
         // Pinned first, then most recently edited.
         return all.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated - a.updated);
     });
+    const folderMap = doc.doc.getMap<YFolder>('folders');
+    const readFolders = () => {
+        const all: Folder[] = [];
+        folderMap.forEach((m, id) => all.push(readFolder(id, m)));
+        return all;
+    };
     return {
         doc,
         notes,
-        create(kind) {
+        folders: yStore(folderMap, readFolders),
+        create(kind, folder = '') {
             const id = newId();
             const now = Date.now();
             doc.doc.transact(() => {
@@ -424,6 +468,7 @@ export function openIndex(): Index {
                 m.set('created', now);
                 m.set('updated', now);
                 m.set('pinned', false);
+                if (folder) m.set('folder', folder);
                 map.set(id, m);
             });
             return id;
@@ -458,7 +503,77 @@ export function openIndex(): Index {
             map.get(id)?.set('deletedAt', Date.now());
         },
         restore(id) {
-            map.get(id)?.set('deletedAt', 0);
+            const m = map.get(id);
+            if (!m) return;
+            doc.doc.transact(() => {
+                m.set('deletedAt', 0);
+                m.delete('deletedWith');
+            });
+        },
+        moveNotes(ids, folder) {
+            doc.doc.transact(() => {
+                for (const id of ids) {
+                    const m = map.get(id);
+                    if (!m || String(m.get('folder') ?? '') === folder) continue;
+                    if (folder) m.set('folder', folder);
+                    else m.delete('folder');
+                }
+            });
+        },
+        createFolder(name, parent) {
+            const id = newId();
+            doc.doc.transact(() => {
+                const m: YFolder = new Y.Map();
+                m.set('name', name);
+                m.set('parent', parent);
+                m.set('created', Date.now());
+                folderMap.set(id, m);
+            });
+            return id;
+        },
+        renameFolder(id, name) {
+            folderMap.get(id)?.set('name', name);
+        },
+        moveFolder(id, parent) {
+            const m = folderMap.get(id);
+            if (!m || within(readFolders(), id).has(parent)) return;
+            m.set('parent', parent);
+        },
+        deleteFolder(id) {
+            const folders = readFolders();
+            const gone = within(folders, id);
+            if (!gone.size) return;
+            const live = new Set(folders.filter((f) => !f.deletedAt).map((f) => f.id));
+            const now = Date.now();
+            doc.doc.transact(() => {
+                for (const fid of gone) {
+                    const m = folderMap.get(fid)!;
+                    m.set('deletedAt', now);
+                    m.set('deletedWith', id);
+                }
+                map.forEach((m, nid) => {
+                    const note = readMeta(nid, m);
+                    // A note shows in its folder only while that's live; see folders.ts.
+                    if (!note.deletedAt && live.has(note.folder) && gone.has(note.folder)) {
+                        m.set('deletedAt', now);
+                        m.set('deletedWith', id);
+                    }
+                });
+            });
+        },
+        restoreFolder(id) {
+            doc.doc.transact(() => {
+                folderMap.forEach((m, fid) => {
+                    if (readFolder(fid, m).deletedWith !== id) return;
+                    m.set('deletedAt', 0);
+                    m.delete('deletedWith');
+                });
+                map.forEach((m) => {
+                    if (String(m.get('deletedWith') ?? '') !== id || !Number(m.get('deletedAt') ?? 0)) return;
+                    m.set('deletedAt', 0);
+                    m.delete('deletedWith');
+                });
+            });
         },
         release: () => doc.release(),
     };
