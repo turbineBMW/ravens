@@ -350,6 +350,33 @@
     padding: 0 4px;
     white-space: nowrap;
 }
+/* Links to notes: the note's title, or a label; a deleted note's struck through, a missing one marked. */
+.tiptap .note-link {
+    color: var(--accent-2);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+}
+.tiptap .note-link[data-state='deleted'] {
+    color: var(--muted);
+    text-decoration: line-through;
+}
+.tiptap .note-link[data-state='missing'] {
+    color: var(--danger);
+    text-decoration: underline dotted;
+}
+.tiptap .note-link.ProseMirror-selectednode {
+    border-radius: 3px;
+    outline: 2px solid var(--accent-2);
+}
+.backlinks {
+    margin: 24px 0 0;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+}
+.backlinks a {
+    color: var(--accent-2);
+}
 /* Matches: every one marked, the current one stronger. */
 .tiptap .find-match {
     border-radius: 2px;

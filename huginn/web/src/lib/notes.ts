@@ -44,6 +44,11 @@
  * A drawing's paper (lines, grid, dots) is in the top-level `paper` map, of
  * strokes map name to paper name. Clients that predate it show plain paper, so
  * neither needs a new format.
+ *
+ * Format 5 adds links between notes: an inline `noteLink` element with
+ * attributes { note, section, heading, label }, a note's ID and optionally a
+ * section in it (see noteLinks.ts). It has no text of its own: it shows its
+ * label, or the note's title as the index has it.
  */
 import * as Y from 'yjs';
 import { generateKeyBetween } from 'fractional-indexing';
@@ -51,17 +56,20 @@ import { base } from '$app/paths';
 import { openDoc, yStore, newId, type OpenDoc } from '@ravens/ui/sync';
 import { within, type Folder } from '$lib/folders';
 import { readConditions, retagConditions, type Condition, type SmartFolder } from '$lib/smartFolders';
+import { linkText } from '$lib/noteLinks';
 import { retag, tagKey, tagMatches } from '$lib/tags';
 import { readable, type Readable } from 'svelte/store';
 
 export type NoteKind = 'checklist' | 'text';
 
 /** The newest note format this client can safely edit. */
-export const NOTE_FORMAT = 4;
+export const NOTE_FORMAT = 5;
 /** A note with more than its first checklist. */
 const SEVERAL_LISTS_FORMAT = 3;
 /** A note with a drawing. */
 const INK_FORMAT = 4;
+/** A note with a link to a note. */
+const LINK_FORMAT = 5;
 
 /** What migrated and new notes are: format 3 is only a note with more than the first list. */
 const BASE_FORMAT = 2;
@@ -349,7 +357,10 @@ export function migrationSeed(noteId: string): Uint8Array {
 
 // ---------- plain text from the body ----------
 
-function inlineText(node: Y.XmlElement | Y.XmlText | Y.XmlHook): string {
+/** What a note link says, given its element: see noteLinks.ts. */
+type LinkTextOf = (link: Y.XmlElement) => string;
+
+function inlineText(node: Y.XmlElement | Y.XmlText | Y.XmlHook, link: LinkTextOf): string {
     if (node instanceof Y.XmlText) {
         return (node.toDelta() as { insert: unknown }[])
             .map((op) => (typeof op.insert === 'string' ? op.insert : ''))
@@ -357,11 +368,12 @@ function inlineText(node: Y.XmlElement | Y.XmlText | Y.XmlHook): string {
     }
     if (!(node instanceof Y.XmlElement)) return '';
     if (node.nodeName === 'hardBreak') return ' ';
-    return (node.toArray() as Y.XmlElement[]).map(inlineText).join('');
+    if (node.nodeName === 'noteLink') return link(node);
+    return (node.toArray() as Y.XmlElement[]).map((n) => inlineText(n, link)).join('');
 }
 
 /** A block's text lines; `decorate` adds list markers and tabs between table cells. */
-function blockLines(node: Y.XmlElement, decorate: boolean): string[] {
+function blockLines(node: Y.XmlElement, decorate: boolean, link: LinkTextOf): string[] {
     const children = () => node.toArray().filter((n): n is Y.XmlElement => n instanceof Y.XmlElement);
     switch (node.nodeName) {
         case 'horizontalRule':
@@ -371,21 +383,21 @@ function blockLines(node: Y.XmlElement, decorate: boolean): string[] {
             return children().flatMap((listItem, at) => {
                 const marker = !decorate ? '' : node.nodeName === 'bulletList' ? '- ' : `${at + 1}. `;
                 return (listItem.toArray() as Y.XmlElement[])
-                    .flatMap((part) => blockLines(part, decorate))
+                    .flatMap((part) => blockLines(part, decorate, link))
                     .map((line, i) => (i === 0 ? marker : decorate ? '  ' : '') + line);
             });
         case 'blockquote':
-            return children().flatMap((part) => blockLines(part, decorate));
+            return children().flatMap((part) => blockLines(part, decorate, link));
         case 'table':
             return children().map((row) =>
                 (row.toArray() as Y.XmlElement[])
-                    .map((cell) => (cell.toArray() as Y.XmlElement[]).map(inlineText).join(' '))
+                    .map((cell) => (cell.toArray() as Y.XmlElement[]).map((n) => inlineText(n, link)).join(' '))
                     .join(decorate ? '\t' : ' '),
             );
         case 'codeBlock':
-            return inlineText(node).split('\n');
+            return inlineText(node, link).split('\n');
         default:
-            return [inlineText(node)];
+            return [inlineText(node, link)];
     }
 }
 
@@ -424,6 +436,8 @@ export interface Index {
     folders: Readable<Folder[]>;
     create(kind: NoteKind, folder?: string): string;
     kindOf(id: string): NoteKind | undefined;
+    /** A note's entry, deleted or not; undefined when the index has none. */
+    entry(id: string): NoteMeta | undefined;
     touch(
         id: string,
         patch: Partial<Pick<NoteMeta, 'title' | 'pinned' | 'preview' | 'open' | 'done' | 'sketch'>>,
@@ -570,6 +584,10 @@ export function openIndex(): Index {
         kindOf(id) {
             const m = map.get(id);
             return m ? readMeta(id, m).kind : undefined;
+        },
+        entry(id) {
+            const m = map.get(id);
+            return m ? readMeta(id, m) : undefined;
         },
         touch(id, patch) {
             const m = map.get(id);
@@ -724,6 +742,8 @@ export interface Note extends ChecklistModel {
     paperMap: Y.Map<string>;
     /** Prepare a new drawing for a block to point at; returns its name. */
     newInk(): string;
+    /** The note has, or is about to have, a link to a note: raise it to the format that has them. */
+    allowLinks(): void;
     /** Check off nothing and everything: these two cover every checklist in the note. */
     /**
      * Rename tag `from` (a key) to `to` everywhere in the note, keeping each
@@ -784,6 +804,13 @@ export function openNote(id: string, index?: Index): Note {
         ];
     };
 
+    /** A link's label, or its note's title as the index has it. */
+    const linkTextOf: LinkTextOf = (el) => {
+        const attr = (name: string) => String(el.getAttribute(name) ?? '');
+        const target = attr('note') ? index?.entry(attr('note')) : undefined;
+        return linkText({ section: attr('section'), heading: attr('heading'), label: attr('label') }, target).text;
+    };
+
     /** The note's text, line by line, with the open checklist items where the checklist is. */
     const textLines = () => {
         const openItems = (map: Y.Map<YItem>) =>
@@ -792,7 +819,7 @@ export function openNote(id: string, index?: Index): Note {
                 .map((i) => i.text);
         const lines = meta.has('format')
             ? blocks().flatMap((block) =>
-                  block.nodeName === 'checklist' ? openItems(listOf(block)) : blockLines(block, false),
+                  block.nodeName === 'checklist' ? openItems(listOf(block)) : blockLines(block, false, linkTextOf),
               )
             : openItems(items);
         return lines.map((line) => line.trim()).filter(Boolean);
@@ -1052,7 +1079,7 @@ export function openNote(id: string, index?: Index): Note {
                     ? readList(listOf(block)).map((i) => `[${i.checked ? 'x' : ' '}] ${i.text}`)
                     : block.nodeName === 'ink'
                       ? ['[Drawing]']
-                      : blockLines(block, true),
+                      : blockLines(block, true, linkTextOf),
             );
             return [...(explicit ? [explicit, ''] : []), ...lines].join('\n').trim() + '\n';
         },
@@ -1075,6 +1102,9 @@ export function openNote(id: string, index?: Index): Note {
         newInk() {
             if (!isTooNew()) needFormat(INK_FORMAT);
             return `strokes:${newId()}`;
+        },
+        allowLinks() {
+            if (!isTooNew()) needFormat(LINK_FORMAT);
         },
         renameTag(from, to) {
             if (isTooNew()) return false;

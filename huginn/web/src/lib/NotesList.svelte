@@ -13,6 +13,7 @@
     import { describe, matches, type Condition, type SmartFolder } from '$lib/smartFolders';
     import TagChip from '$lib/TagChip.svelte';
     import { filterByTag, refreshTags, tagFilter, tags, tagsFresh } from '$lib/tags';
+    import { refreshLinks } from '$lib/noteLinks';
     import { MIN_SEARCH, searchNotes, snippetParts, type SearchHit } from '$lib/search';
     import { listHref, noteHref, scopeOf, type Scope } from '$lib/scope';
     import { openNote, type Index, type NoteMeta } from '$lib/notes';
@@ -117,10 +118,13 @@
     const passes = (n: NoteMeta) =>
         $tagFilter.include.every((t) => tagNotes.get(t)?.has(n.id)) &&
         !$tagFilter.exclude.some((t) => tagNotes.get(t)?.has(n.id));
-    // Notes change their tags as they're edited, here or elsewhere: fetch them again shortly after.
+    // Notes change their tags and links as they're edited, here or elsewhere: fetch them again shortly after.
     $effect(() => {
         void $notes;
-        const timer = setTimeout(() => void refreshTags(), 1500);
+        const timer = setTimeout(() => {
+            void refreshTags();
+            void refreshLinks();
+        }, 1500);
         return () => clearTimeout(timer);
     });
 

@@ -1,5 +1,6 @@
 //! Huginn, "thought": notes, checklists, sketches.
 
+mod links;
 mod search;
 mod tags;
 
@@ -16,6 +17,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_search.sql"),
     include_str!("../migrations/0003_tags.sql"),
+    include_str!("../migrations/0004_links.sql"),
 ];
 
 fn routes(_state: SharedState) -> Router<SharedState> {
@@ -23,6 +25,7 @@ fn routes(_state: SharedState) -> Router<SharedState> {
     Router::new()
         .route("/v1/search", get(search_notes))
         .route("/v1/tags", get(list_tags))
+        .route("/v1/links", get(list_links))
 }
 
 /// Notes stored before search existed, or since its extraction changed, are
@@ -68,12 +71,24 @@ async fn list_tags(
     })
 }
 
+/// `GET /v1/links`: every link between the user's notes, for showing backlinks.
+async fn list_links(
+    User(me): User,
+    State(state): State<SharedState>,
+) -> Result<Json<Vec<links::Link>>, StatusCode> {
+    let conn = state.db.lock().unwrap_or_else(|e| e.into_inner());
+    links::list(&conn, &me.login).map(Json).map_err(|err| {
+        tracing::error!(?err, "listing links");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     raven_server::run(AppSpec {
         app: RavenApp::Huginn,
-        // Drawings (note format 4). Format 3 clients already refuse to edit those
-        // notes; this keeps the client and the format moving together.
-        min_client: 4,
+        // Links between notes (note format 5). A format 4 client would drop a
+        // link it can't read, so it must update before it syncs again.
+        min_client: 5,
         migrations: MIGRATIONS,
         routes,
         on_change: Some(search::on_change),
